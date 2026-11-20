@@ -2594,6 +2594,28 @@ async function renderAdmin() {
   $('#adminUsers').querySelectorAll('[data-act]').forEach((b) => b.onclick = () => adminAction(b.closest('.u-row').dataset.id, b.dataset.act));
   renderAnnAdmin();
   renderChannelsAdmin();
+  renderGroupsAdmin();
+}
+// Все групповые чаты компании (только сведения, без переписки) — администратор может удалить любой
+async function renderGroupsAdmin() {
+  const card = $('#groupsCard');
+  if (!card) return;
+  let rows = [];
+  try { rows = check(await sb.rpc('sl_admin_groups')); } catch (e) { card.innerHTML = `<div class="admin-card-title">Групповые чаты</div><div class="modal-err">${esc(humanError(e))}</div>`; return; }
+  const when = (t) => t ? new Date(t).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'сообщений нет';
+  card.innerHTML = `<div class="admin-card-title">Групповые чаты <span class="n">${rows.length}</span></div>
+    ${rows.map((g) => `<div class="u-row"><div class="u-main">
+        <div class="u-name">👥 ${esc(g.name)} ${g.members.includes(state.me.id) ? '<span class="tag shared">вы участник</span>' : ''}</div>
+        <div class="u-meta">создал(а): <b>${esc(userName(g.created_by))}</b> · ${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')} · ${g.messages} ${plural(Number(g.messages), 'сообщение', 'сообщения', 'сообщений')} · последнее: ${when(g.last_at)}</div>
+        <div class="u-meta">${g.members.map(userName).map(esc).join(', ')}</div></div>
+      <div class="u-actions">${g.members.includes(state.me.id) ? `<button data-gopen="${g.id}">Открыть</button>` : ''}<button class="warn" data-gdel="${g.id}" data-name="${esc(g.name)}">Удалить</button></div></div>`).join('') || '<div class="muted">Групповых чатов пока нет</div>'}`;
+  card.querySelectorAll('[data-gopen]').forEach((b) => b.onclick = () => openChat('g:' + b.dataset.gopen));
+  card.querySelectorAll('[data-gdel]').forEach((b) => b.onclick = async () => {
+    const chat = 'g:' + b.dataset.gdel;
+    if (!confirm(`Удалить чат «${b.dataset.name}» вместе со всей перепиской?\n\nЭто нельзя отменить — сообщения и файлы пропадут у всех участников.`)) return;
+    try { await rpc('sl_delete_chat', { p_chat: chat }); onChatDeleted(chat); toast(`Чат «${b.dataset.name}» удалён`); renderGroupsAdmin(); }
+    catch (e) { toast(humanError(e)); }
+  });
 }
 function renderInvite(info) {
   $('#inviteCard').innerHTML = `
