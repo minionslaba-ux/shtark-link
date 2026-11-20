@@ -1,0 +1,1 @@
+-- v3 надёжность: sl_audit (+триггеры, sl_audit_add), sl_devices + sl_device_ping/sl_revoke_device/sl_logout_all, хранилище sl-backups, sl_backup_run (cron по воскресеньям), функция sl-backup. Применено миграциями shtark_link_v3_reliability, shtark_link_audit_channel_members, shtark_link_backup_cron.

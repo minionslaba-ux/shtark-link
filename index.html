@@ -885,6 +885,21 @@
   .kb-body ul { margin: 0 0 8px; padding-left: 22px; }
   .chat-item.working .ico { color: #22c55e; opacity: 1; }
   table.rep.work th, table.rep.work td { padding: 5px 6px; font-size: 13px; white-space: nowrap; }
+  /* панель действий над сообщением на телефоне — внизу экрана, всегда целиком */
+  @media (hover: none), (max-width: 720px) {
+    .msg.sel .msg-acts { position: fixed; top: auto; right: auto; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+      z-index: 60; display: flex; gap: 2px; padding: 4px 6px; border-radius: 22px; box-shadow: var(--shadow-lg); max-width: calc(100vw - 24px); animation: actsUp .18s var(--ease-out) both; }
+    @keyframes actsUp { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    .msg.mine.sel .msg-acts { left: 50%; right: auto; }
+    .msg.sel .msg-acts button { font-size: 20px; padding: 8px 10px; }
+    .msg.sel .body { box-shadow: 0 0 0 2px var(--accent) !important; }
+  }
+  /* v3: надёжность */
+  .audit-list { max-height: 420px; overflow-y: auto; }
+  .au-row { display: flex; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--border); font-size: 13.5px; }
+  .au-time { color: var(--muted); white-space: nowrap; min-width: 110px; font-size: 12.5px; }
+  .au-main { flex: 1; min-width: 0; }
+  .msg.pending .body { opacity: .7; }
 </style>
 </head>
 <body>
@@ -1034,6 +1049,8 @@
         <div class="admin-card" id="groupsCard"></div>
         <div class="admin-card" id="dmsCard"></div>
         <div class="admin-card" id="workCard"></div>
+        <div class="admin-card" id="backupCard"></div>
+        <div class="admin-card" id="auditCard"></div>
         <div class="admin-card">
           <div class="admin-card-title">Сотрудники <span class="n" id="adminCount"></span></div>
           <div id="adminUsers"></div>
@@ -1081,8 +1098,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611210640"></script>
-<script src="config.js?v=202611210640"></script>
-<script src="app.js?v=202611210640"></script>
+<script src="vendor/supabase.js?v=202611210700"></script>
+<script src="config.js?v=202611210700"></script>
+<script src="app.js?v=202611210700"></script>
 </body>
 </html>

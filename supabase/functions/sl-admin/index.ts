@@ -19,6 +19,11 @@ const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SE
 const emailFor = (login: string) => `${login}@shtark-link.invalid`;
 const FOREVER = '876000h'; // ~100 лет
 
+// журнал действий администратора
+async function audit(actor: string, action: string, target: string, details: Record<string, unknown> = {}) {
+  await db.from('sl_audit').insert({ actor, action, target, details });
+}
+
 async function activeAdmins(exceptId?: string) {
   let q = db.from('sl_profiles').select('id', { count: 'exact', head: true }).eq('is_admin', true).eq('disabled', false);
   if (exceptId) q = q.neq('id', exceptId);
@@ -63,6 +68,7 @@ Deno.serve(async (req) => {
         if (error || !created.user) return json({ error: 'Не удалось создать: ' + (error?.message || '') }, 400);
         const { error: pe } = await db.from('sl_profiles').insert({ id: created.user.id, login, name, position, is_admin: !!b.isAdmin });
         if (pe) { await db.auth.admin.deleteUser(created.user.id); return json({ error: pe.message }, 500); }
+        await audit(me.id, 'Добавлен сотрудник', name, { логин: login, должность: position, администратор: !!b.isAdmin });
         return json({ ok: true, id: created.user.id });
       }
       case 'disable': {
@@ -72,28 +78,33 @@ Deno.serve(async (req) => {
         await db.from('sl_profiles').update({ disabled: true }).eq('id', id);
         await db.from('sl_group_members').delete().eq('user_id', id);
         await db.from('sl_push_subs').delete().eq('user_id', id);
+        await audit(me.id, 'Доступ отключён', target.name);
         return json({ ok: true });
       }
       case 'enable': {
         await db.auth.admin.updateUserById(id, { ban_duration: 'none' });
         await db.from('sl_profiles').update({ disabled: false }).eq('id', id);
+        await audit(me.id, 'Доступ возвращён', target.name);
         return json({ ok: true });
       }
       case 'password': {
         const password = String(b.password || '');
         if (password.length < 6) return json({ error: 'Пароль — минимум 6 символов' }, 400);
         const { error } = await db.auth.admin.updateUserById(id, { password });
+        if (!error) await audit(me.id, 'Выдан новый пароль', target.name);
         return error ? json({ error: error.message }, 400) : json({ ok: true });
       }
       case 'profile': {
         const name = String(b.name || '').trim(), position = String(b.position || '').trim().slice(0, 60);
         if (!name || name.length > 64) return json({ error: 'Укажите имя и фамилию' }, 400);
         const { error } = await db.from('sl_profiles').update({ name, position }).eq('id', id);
+        if (!error && (name !== target.name || position !== (target.position || ''))) await audit(me.id, 'Изменены имя или должность', name, { было: `${target.name} — ${target.position || ''}`, стало: `${name} — ${position}` });
         return error ? json({ error: error.message }, 400) : json({ ok: true });
       }
       case 'admin': {
         if (!b.isAdmin && target.is_admin && (await activeAdmins(id)) === 0) return json({ error: 'Должен остаться хотя бы один администратор' }, 400);
         await db.from('sl_profiles').update({ is_admin: !!b.isAdmin }).eq('id', id);
+        await audit(me.id, b.isAdmin ? 'Назначен администратором' : 'Снят с администраторов', target.name);
         return json({ ok: true });
       }
     }

@@ -375,12 +375,21 @@ function openMyProfile() {
       </div>
       <div class="disc-title">Контакты</div>
       ${profileFieldsHtml(me)}
+      <div class="disc-title">Мои устройства</div>
+      <div id="devList"><p class="muted">Загрузка…</p></div>
+      <button class="secondary" type="button" id="logoutAll" style="margin-top:6px">Выйти на всех устройствах</button>
       <div class="modal-err" id="mErr"></div>
     </div>
     <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pfSave">Сохранить</button></div>`,
   (root) => {
     root.querySelector('[data-close]').onclick = closeModal;
     mountAvatarEditor(root, me.id);
+    loadDevices(root);
+    root.querySelector('#logoutAll').onclick = async () => {
+      if (!confirm('Выйти из Shtark Link на всех устройствах, включая это? Потом нужно будет снова ввести логин и пароль.')) return;
+      try { await rpc('sl_logout_all', { p_user: state.me.id }); } catch {}
+      logout();
+    };
     root.querySelectorAll('.presets [data-e]').forEach((b) => b.onclick = () => { root.querySelector('#stEmoji').value = b.dataset.e; root.querySelector('#stText').value = b.dataset.t; });
     root.querySelector('#stClear').onclick = () => { root.querySelector('#stEmoji').value = ''; root.querySelector('#stText').value = ''; root.querySelector('#stUntil').value = ''; };
     root.querySelector('#pfSave').onclick = async () => {
@@ -639,6 +648,11 @@ function heartbeat() {
       setTimeout(logout, 2000);
     }
   }).catch(() => {});
+  // учёт устройств: если с этого устройства выполнен выход (из профиля или администратором) — выходим
+  sb.rpc('sl_device_ping', { p_device: deviceId, p_ua: navigator.userAgent }).then(({ data }) => {
+    if (data === false && !kicked) { kicked = true; toast('На этом устройстве выполнен выход из Shtark Link'); setTimeout(logout, 1500); }
+  }, () => {});
+  flushOutbox();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { heartbeat(); if (state.view === 'chat') markRead(); loadUnread(); } });
 
@@ -1218,6 +1232,7 @@ async function openChat(chat) {
     } catch (e) { toast(humanError(e)); return; }
   }
   if (state.current !== chat || state.view !== 'chat') return;
+  getOutbox().filter((t) => t.chat === chat).forEach((t) => { const l = state.messages.get(chat); if (l && !l.some((x) => x.id === t.tmpId)) l.push({ id: t.tmpId, chat, userId: state.me.id, text: t.text, file: null, system: false, createdAt: t.at, replyTo: null, editedAt: null, pinnedAt: null, mentions: [], pending: true }); });
   renderMessages(true);
   markRead();
   loadPins(chat);
@@ -1269,7 +1284,7 @@ function messageHtml(m, prev) {
     </div>`;
   const tc = state.threadCounts.get(m.id) || 0;
   return dayHtml +
-    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''} ${m.sticker ? 'has-sticker' : ''} ${m.urgent ? 'urgent' : ''} ${m.file?.circle ? 'has-circle' : ''}" data-id="${m.id}">
+    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''} ${m.sticker ? 'has-sticker' : ''} ${m.urgent ? 'urgent' : ''} ${m.file?.circle ? 'has-circle' : ''} ${m.pending ? 'pending' : ''}" data-id="${m.id}">
       ${avatar(u)}
       <div class="body">
         <div class="meta"><b>${esc(u.name)}${u.statusEmoji && statusOf(u) ? ' ' + esc(u.statusEmoji) : ''}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b>${u.position ? `<span class="pos">${esc(u.position)}</span>` : ''}<span>${fmtTime(m.createdAt)}</span>${m.pinnedAt ? '<span title="Закреплено">📌</span>' : ''}</div>
@@ -1279,7 +1294,7 @@ function messageHtml(m, prev) {
         ${m.poll ? pollHtml(m) : m.sticker ? `<img class="sticker" src="stickers/${esc(m.sticker)}.svg" alt="${esc(m.text)}" title="${esc(m.text)}">` : m.text ? `<div class="text">${richText(m)}</div>` : ''}
         ${file}
         ${tc ? `<button class="thread-link" data-thread="${m.id}">💬 ${tc} ${plural(tc, 'ответ', 'ответа', 'ответов')} в ветке</button>` : ''}
-        <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont || mine ? fmtTime(m.createdAt) : ''}${mine && m.pinnedAt ? ' 📌' : ''}${mine ? ticksHtml(m) : ''}</span></div>
+        <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont || mine ? fmtTime(m.createdAt) : ''}${mine && m.pinnedAt ? ' 📌' : ''}${m.pending ? ' <span class="tick" title="Нет связи — отправится автоматически">⏳</span>' : mine ? ticksHtml(m) : ''}</span></div>
         ${acts}
       </div></div>`;
 }
@@ -1407,6 +1422,7 @@ $('#messages').addEventListener('click', async (e) => {
   if (tapped && !e.target.closest('a, img, audio, button')) {
     document.querySelectorAll('.msg.sel').forEach((x) => x !== tapped && x.classList.remove('sel'));
     tapped.classList.toggle('sel');
+    if (tapped.classList.contains('sel') && matchMedia('(hover: none), (max-width: 720px)').matches) tapped.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   const img = e.target.closest('.img-preview');
   if (img && img.src) {
@@ -1475,6 +1491,7 @@ async function send() {
     onMessage(msgFromRow(row));
     clearDraft(chat);
   } catch (e) {
+    if (isNetworkError(e)) { queueOutbox({ chat, text, reply_to: replyTo, mentions, urgent: false }); clearDraft(chat); return; }
     $('#input').value = text; autosize();
     toast('Сообщение не отправлено: ' + humanError(e));
   }
@@ -2534,6 +2551,100 @@ async function openWorkReport() {
   }, 'wide');
 }
 
+
+// ===================== v3: надёжность =====================
+// Журнал действий (администратор)
+async function renderAuditAdmin() {
+  const card = $('#auditCard'); if (!card) return;
+  let rows = [];
+  try { rows = check(await sb.from('sl_audit').select('*').order('at', { ascending: false }).limit(300)); } catch (e) { card.innerHTML = `<div class="admin-card-title">Журнал действий</div><div class="modal-err">${esc(humanError(e))}</div>`; return; }
+  const fmtD = (d) => Object.entries(d || {}).map(([k, v]) => `${esc(k.replace(/_/g, ' '))}: ${esc(typeof v === 'boolean' ? (v ? 'да' : 'нет') : String(v))}`).join(' · ');
+  card.innerHTML = `<div class="admin-card-title">🧾 Журнал действий <span class="n">${rows.length}</span></div>
+    <label class="field"><input id="auQ" placeholder="Поиск: сотрудник, действие"></label>
+    <div id="auList" class="audit-list">${rows.map((r) => `<div class="au-row" data-q="${esc((r.action + ' ' + r.target + ' ' + (r.actor ? userName(r.actor) : '')).toLowerCase())}">
+      <span class="au-time">${new Date(r.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+      <span class="au-main"><b>${esc(r.actor ? userName(r.actor) : 'Система')}</b> — ${esc(r.action)}${r.target ? ': <b>' + esc(r.target) + '</b>' : ''}${Object.keys(r.details || {}).length ? `<div class="u-meta">${fmtD(r.details)}</div>` : ''}</span></div>`).join('') || '<div class="muted">Пока пусто — здесь появятся действия администраторов</div>'}</div>`;
+  card.querySelector('#auQ').oninput = (e) => { const q = e.target.value.toLowerCase().trim(); card.querySelectorAll('.au-row').forEach((r) => r.classList.toggle('hidden', !!q && !r.dataset.q.includes(q))); };
+}
+// Резервные копии (администратор)
+async function renderBackupsAdmin() {
+  const card = $('#backupCard'); if (!card) return;
+  const { data, error } = await sb.storage.from('sl-backups').list('', { limit: 100, sortBy: { column: 'name', order: 'desc' } });
+  const files = (data || []).filter((f) => f.name.startsWith('backup-'));
+  card.innerHTML = `<div class="admin-card-title">💾 Резервные копии</div>
+    <div class="muted" style="margin-bottom:8px">Автоматически каждое воскресенье в 3:00 (хранятся последние 12). В копии — переписка, задачи, календарь, заявки, база знаний и журнал. Вложения остаются в хранилище, в копии — их названия.</div>
+    ${error ? `<div class="modal-err">${esc(error.message)}</div>` : ''}
+    ${files.map((f) => `<div class="u-row"><div class="u-main"><div class="u-name">${esc(f.name.replace('backup-', '').replace('.json', '').replace(/^(\d{4})-(\d\d)-(\d\d)-(\d\d)-(\d\d)$/, '$3.$2.$1 $4:$5 UTC'))}</div><div class="u-meta">${fmtSize(f.metadata?.size || 0)}</div></div>
+      <div class="u-actions"><button data-bk="${esc(f.name)}">⬇ Скачать</button></div></div>`).join('') || '<div class="muted">Копий пока нет</div>'}
+    <button class="secondary" id="bkNow" style="margin-top:8px">Создать копию сейчас</button>`;
+  card.querySelectorAll('[data-bk]').forEach((b) => b.onclick = async () => {
+    const { data: blob, error: er } = await sb.storage.from('sl-backups').download(b.dataset.bk);
+    if (er) return toast(humanError(er));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = b.dataset.bk; document.body.appendChild(a); a.click(); a.remove();
+  });
+  card.querySelector('#bkNow').onclick = async (e) => {
+    e.target.disabled = true; e.target.textContent = 'Создаю копию…';
+    try { const r = await fn('sl-backup', {}); toast(`💾 Копия создана: ${fmtSize(r.size)}, сообщений ${r.counts?.sl_messages ?? '—'}`); renderBackupsAdmin(); renderAuditAdmin(); }
+    catch (er) { toast(humanError(er)); e.target.disabled = false; e.target.textContent = 'Создать копию сейчас'; }
+  };
+}
+// Мои устройства
+const uaShort = (ua) => {
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'Устройство';
+  const br = /YaBrowser/.test(ua) ? 'Яндекс Браузер' : /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox/.test(ua) ? 'Firefox' : /CriOS|Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : '';
+  return br ? `${os} · ${br}` : os;
+};
+async function loadDevices(root) {
+  const box = root.querySelector('#devList'); if (!box) return;
+  const { data } = await sb.from('sl_devices').select('*').eq('user_id', state.me.id).eq('revoked', false).order('last_seen', { ascending: false });
+  box.innerHTML = (data || []).map((d) => `<div class="person" style="cursor:default"><span>${/iPhone|Android|iPad/.test(d.ua) ? '📱' : '💻'}</span>
+    <span style="flex:1"><b>${esc(uaShort(d.ua))}</b>${d.id === deviceId ? ' <span class="tag shared">это устройство</span>' : ''}<div class="u-meta">последний вход: ${new Date(d.last_seen).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div></span>
+    ${d.id === deviceId ? '' : `<button class="hbtn" data-rev="${esc(d.id)}">Выйти</button>`}</div>`).join('') || '<p class="muted">Нет данных</p>';
+  box.querySelectorAll('[data-rev]').forEach((b) => b.onclick = async () => {
+    try { await rpc('sl_revoke_device', { p_device: b.dataset.rev }); b.closest('.person').remove(); toast('Выход на устройстве выполнен'); } catch (e) { toast(humanError(e)); }
+  });
+}
+// Работа без связи: сообщения ждут в очереди и уходят сами
+const isNetworkError = (e) => !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network/i.test(String(e?.message || e));
+function getOutbox() { try { return JSON.parse(localStorage.getItem('sl-outbox') || '[]'); } catch { return []; } }
+function setOutbox(list) { try { localStorage.setItem('sl-outbox', JSON.stringify(list)); } catch {} }
+function queueOutbox(item) {
+  const tmp = { ...item, tmpId: 'tmp-' + Date.now() + Math.random().toString(36).slice(2, 6), at: Date.now() };
+  setOutbox([...getOutbox(), tmp]);
+  showPending(tmp);
+  toast('⏳ Нет связи — сообщение отправится, как только появится интернет');
+}
+function showPending(t) {
+  const m = { id: t.tmpId, chat: t.chat, userId: state.me.id, text: t.text, file: null, system: false, createdAt: t.at, replyTo: null, editedAt: null, pinnedAt: null, mentions: [], pending: true };
+  const list = state.messages.get(t.chat);
+  if (list && !list.some((x) => x.id === m.id)) list.push(m);
+  if (state.view === 'chat' && state.current === t.chat) appendMessage(m);
+}
+let flushing = false;
+async function flushOutbox() {
+  const box = getOutbox();
+  if (!box.length || flushing || !navigator.onLine) return;
+  flushing = true;
+  try {
+    for (const t of box) {
+      try {
+        const row = check(await sb.from('sl_messages').insert({ chat: t.chat, user_id: state.me.id, text: t.text, reply_to: t.reply_to || null, mentions: t.mentions || [], urgent: !!t.urgent }).select().single());
+        setOutbox(getOutbox().filter((x) => x.tmpId !== t.tmpId));
+        for (const list of state.messages.values()) { const i = list.findIndex((x) => x.id === t.tmpId); if (i >= 0) list.splice(i, 1); }
+        document.querySelector(`#messages [data-id="${t.tmpId}"]`)?.remove();
+        onMessage(msgFromRow(row));
+      } catch (e) {
+        if (isNetworkError(e)) break;
+        setOutbox(getOutbox().filter((x) => x.tmpId !== t.tmpId)); // ошибка не связи (например, нет доступа) — не повторяем
+        document.querySelector(`#messages [data-id="${t.tmpId}"]`)?.remove();
+        toast('Сообщение не отправлено: ' + humanError(e));
+      }
+    }
+  } finally { flushing = false; }
+}
+window.addEventListener('online', () => { toast('Связь восстановлена'); flushOutbox(); });
+window.addEventListener('offline', () => toast('⚠ Нет подключения к интернету — сообщения будут ждать отправки'));
+
 // ---------- Календарь ----------
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const eventFromRow = (e) => ({ id: e.id, userId: e.user_id, title: e.title, note: e.note, date: e.date, time: e.time, shared: e.shared, done: e.done, callChat: e.call_chat || null });
@@ -3308,6 +3419,7 @@ async function renderAdmin() {
           ? '<button data-act="enable">Вернуть доступ</button>'
           : `<button data-act="profile">Изменить</button>
              <button data-act="password">Новый пароль</button>
+             <button data-act="logoutall" title="Завершить все входы сотрудника">Выйти везде</button>
              ${u.id !== state.me.id ? `<button data-act="admin">${u.is_admin ? 'Снять админа' : 'Сделать админом'}</button>
              <button data-act="disable" class="warn">Отключить</button>` : ''}`}
       </div>
@@ -3317,6 +3429,8 @@ async function renderAdmin() {
   renderChannelsAdmin();
   renderGroupsAdmin();
   renderDmsAdmin();
+  renderAuditAdmin();
+  renderBackupsAdmin();
   const wc = $('#workCard');
   if (wc) { wc.innerHTML = `<div class="admin-card-title">⏱ Рабочее время</div><div class="muted" style="margin-bottom:8px">Отметки сотрудников «Начать / Закончить рабочий день».</div><button class="secondary" id="wRep">Открыть табель за 2 недели</button>`; $('#wRep').onclick = openWorkReport; }
 }
@@ -3465,6 +3579,10 @@ async function adminAction(id, act) {
             } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
           };
         });
+    } else if (act === 'logoutall') {
+      if (!confirm(`Выйти из Shtark Link на всех устройствах «${u.name}»? Сотруднику нужно будет снова ввести логин и пароль.`)) return;
+      await rpc('sl_logout_all', { p_user: id });
+      toast(`${u.name}: выход на всех устройствах выполнен`);
     } else if (act === 'password') {
       const password = genPassword();
       if (!confirm(`Задать «${u.name}» новый пароль? Старый перестанет работать.`)) return;
