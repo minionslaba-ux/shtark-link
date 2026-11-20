@@ -9,16 +9,30 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data && event.data.text() }; }
-  event.waitUntil(self.registration.showNotification(data.title || 'Shtark Link', {
+  event.waitUntil((async () => {
+    // звонок: повторные уведомления заменяют предыдущее (каждое — со звуком и вибрацией)
+    if (data.group) {
+      const old = await self.registration.getNotifications();
+      old.filter((n) => n.data && n.data.group === data.group).forEach((n) => n.close());
+    }
+    // повтор звонка не нужен, если приложение открыто на экране (там играет своя мелодия) — кроме iPhone: он требует показывать каждое уведомление
+    if (data.seq) {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const apple = /iPhone|iPad|Macintosh/.test(self.navigator.userAgent);
+      if (!apple && wins.some((w) => w.visibilityState === 'visible')) return;
+    }
+    await self.registration.showNotification(data.title || 'Shtark Link', {
     body: data.body || '',
     icon: rel(data.icon || 'icon-192.png'),
     badge: rel(data.badge || 'icon-192.png'),
     tag: data.tag,
     renotify: !!data.tag,
     requireInteraction: !!data.requireInteraction,
-    vibrate: data.requireInteraction ? [300, 150, 300, 150, 300] : undefined,
-    data: { url: rel(data.url || '') },
-  }));
+    vibrate: data.requireInteraction ? [500, 200, 500, 200, 500, 200, 500] : undefined,
+    silent: false,
+    data: { url: rel(data.url || ''), group: data.group || null },
+  });
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

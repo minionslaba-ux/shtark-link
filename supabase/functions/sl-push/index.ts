@@ -62,7 +62,7 @@ async function names(ids: string[]) {
   return new Map((data || []).map((p: { id: string; name: string }) => [p.id, p.name]));
 }
 
-type Payload = { title: string; body: string; url: string; tag: string; ttl?: number; urgency?: string; requireInteraction?: boolean };
+type Payload = { title: string; body: string; url: string; tag: string; ttl?: number; urgency?: string; requireInteraction?: boolean; group?: string; seq?: number };
 
 async function send(userIds: string[], p: Payload, { force = false } = {}) {
   let ids = [...new Set(userIds.filter(Boolean))];
@@ -223,9 +223,11 @@ Deno.serve(async (req) => {
         const chat = String(body.chat || ''), to = String(body.user || '');
         const { data: inv } = await db.from('sl_call_invites').select('created_at').eq('chat', chat).eq('user_id', to).eq('invited_by', me.id).maybeSingle();
         if (!inv || Date.parse(inv.created_at) < Date.now() - 120_000) return json({ error: 'Нет приглашения' }, 403);
+        const seq = Math.max(0, Math.min(12, Number(body.seq) || 0));
         return json({ sent: await send([to], {
           title: '📞 Приглашение в звонок', body: `${me.name} приглашает вас в разговор`,
-          url: `/#call=${encodeURIComponent(chat)}&from=${me.id}`, tag: `call-${chat}`, ttl: 45, urgency: 'high', requireInteraction: true,
+          url: `/#call=${encodeURIComponent(chat)}&from=${me.id}`, tag: `call-${chat}-${seq}`, group: `call-${chat}`, seq,
+          ttl: 15, urgency: 'high', requireInteraction: true,
         }, { force: true }) });
       }
       case 'ring': {
@@ -233,10 +235,20 @@ Deno.serve(async (req) => {
         const list = await members(chat);
         if (!list.includes(me.id)) return json({ error: 'Нет доступа' }, 403);
         const title = await chatTitle(chat);
+        // seq > 0 — повтор, пока звонящий ждёт ответа: каждое уведомление звучит заново
+        const seq = Math.max(0, Math.min(12, Number(body.seq) || 0));
         return json({ sent: await send(list.filter((id) => id !== me.id), {
           title: '📞 Входящий звонок', body: title ? `${me.name} начал(а) звонок в «${title}»` : `${me.name} звонит вам`,
-          url: `/#chat=${chat}`, tag: `call-${chat}`, ttl: 45, urgency: 'high', requireInteraction: true,
+          url: `/#chat=${chat}`, tag: `call-${chat}-${seq}`, group: `call-${chat}`, seq, ttl: seq ? 15 : 45, urgency: 'high', requireInteraction: true,
         }, { force: true }) }); // о звонке сообщаем всегда: телефон мог только что заснуть
+      }
+      case 'ring-cancel': { // звонящий положил трубку — заменяем «звонит» на «пропущенный»
+        const chat = String(body.chat || '');
+        const list = await members(chat);
+        if (!list.includes(me.id)) return json({ error: 'Нет доступа' }, 403);
+        return json({ sent: await send(list.filter((id) => id !== me.id), {
+          title: '📞 Пропущенный звонок', body: me.name, url: `/#chat=${chat}`, tag: `missed-${chat}`, group: `call-${chat}`, ttl: 3600,
+        }, { force: true }) });
       }
     }
     return json({ error: 'Неизвестное действие' }, 400);

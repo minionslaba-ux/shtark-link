@@ -2683,6 +2683,8 @@ async function joinCall(chat, opts = {}) {
     await leaveCall();
   }
   hideIncoming();
+  // убрать уведомление «звонит» с экрана блокировки
+  state.push.reg?.getNotifications?.().then((ns) => ns.filter((n) => n.data?.group === 'call-' + chat).forEach((n) => n.close())).catch(() => {});
   call.joining = true;
   try {
     const [tok] = await Promise.all([fn('sl-call-token', { chat }), loadLiveKit()]);
@@ -2771,6 +2773,9 @@ async function joinCall(chat, opts = {}) {
       if (!chat.startsWith('c:')) {
         fn('sl-push', { action: 'ring', chat }).catch(() => {});
         startRingback(); // гудки, пока не ответят
+        // телефон собеседника «звонит»: повторяем уведомление каждые 4 с, пока не ответят (до 45 с)
+        if (chat.startsWith('d:')) repeatPush(() => call.chat === chat && call.room === room && room.remoteParticipants.size === 0,
+          (seq) => fn('sl-push', { action: 'ring', chat, seq }));
       }
       if (chat.startsWith('d:')) {
         call.ringTimeout = setTimeout(() => {
@@ -2786,17 +2791,28 @@ async function joinCall(chat, opts = {}) {
   } finally { call.joining = false; }
 }
 
+// Повтор push-уведомления о звонке, пока условие верно (не больше 10 раз)
+function repeatPush(alive, sendFn, every = 4000, max = 10) {
+  let seq = 0;
+  const t = setInterval(() => {
+    if (!alive() || ++seq > max) return clearInterval(t);
+    sendFn(seq).catch(() => {});
+  }, every);
+  (call.pushTimers = call.pushTimers || []).push(t);
+}
 async function leaveCall() {
   if (!call.room) return;
   const room = call.room, chat = call.chat;
   if (chat?.startsWith('d:') && room.remoteParticipants.size === 0) {
     state.rt?.send({ type: 'broadcast', event: 'call', payload: { type: 'cancel', chat, from: state.me.id } });
+    fn('sl-push', { action: 'ring-cancel', chat }).catch(() => {}); // у собеседника вместо «звонит» — «пропущенный»
   }
   cleanupCall();
   await room.disconnect().catch(() => {});
 }
 function cleanupCall(o = {}) {
   call.zero = null;
+  (call.pushTimers || []).forEach(clearInterval); call.pushTimers = [];
   clearInterval(call.timer); clearInterval(call.diagTimer); clearTimeout(call.ringTimeout);
   stopRingback();
   const ctx = call.audioCtx; call.audioCtx = null;
@@ -2917,6 +2933,8 @@ function openCallInvite() {
         await rpc('sl_call_invite', { p_chat: chat, p_user: uid });
         state.rt?.send({ type: 'broadcast', event: 'call', payload: { type: 'ring', chat, from: state.me.id, to: uid } });
         fn('sl-push', { action: 'invite', chat, user: uid }).catch(() => {});
+        const room = call.room;
+        repeatPush(() => call.room === room && !room.remoteParticipants.has(uid), (seq) => fn('sl-push', { action: 'invite', chat, user: uid, seq }));
         b.textContent = '✓ Позвали';
         toast(`📞 ${userName(uid)}: приглашение отправлено`);
       } catch (er) { b.disabled = false; b.textContent = 'Позвать'; toast(humanError(er)); }
