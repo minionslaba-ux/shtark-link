@@ -299,6 +299,7 @@
   .tile .avatar { width: 48px; height: 48px; font-size: 18px; }
   .tile .t-name { position: absolute; left: 6px; right: 6px; bottom: 5px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000; z-index: 1; }
   .tile .t-mute { position: absolute; top: 5px; right: 6px; font-size: 12px; z-index: 1; }
+  .call-sound { margin: 0 12px 4px; padding: 10px; border: 0; border-radius: 10px; background: #f59e0b; color: #111827; font-weight: 600; font-size: 14px; }
   .call-controls { display: flex; justify-content: center; gap: 12px; padding: 10px 12px 14px; }
   .call-btn { width: 46px; height: 46px; border-radius: 50%; border: 0; background: rgba(255,255,255,.14); color: #fff; font-size: 19px; display: flex; align-items: center; justify-content: center; }
   .call-btn:hover { background: rgba(255,255,255,.24); }
@@ -468,6 +469,7 @@
     <button class="call-icon" id="callExpand" title="Развернуть">⤢</button>
   </div>
   <div class="call-grid" id="callGrid"></div>
+  <button id="callSound" class="call-sound hidden">🔊 Нажмите, чтобы включить звук собеседников</button>
   <div class="call-controls">
     <button class="call-btn" id="callMic" title="Микрофон">🎤</button>
     <button class="call-btn" id="callCam" title="Камера">📷</button>

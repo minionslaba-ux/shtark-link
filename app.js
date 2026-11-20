@@ -1557,10 +1557,49 @@ function loadLiveKit() {
   return lkLoading;
 }
 
+// ---------- Доступ к микрофону и камере ----------
+function mediaErrorText(e, what = 'микрофон') {
+  const n = e?.name || '';
+  const What = what[0].toUpperCase() + what.slice(1);
+  if (!navigator.mediaDevices?.getUserMedia || n === 'Unsupported' || n === 'NotSupportedError') {
+    return `Этот браузер не даёт сайтам доступ к устройствам. Если вы открыли ссылку из Telegram, WhatsApp или другого мессенджера — откройте её в ${isIOS ? 'Safari' : 'Chrome'}.`;
+  }
+  if (n === 'NotAllowedError' || n === 'SecurityError') {
+    return isIOS
+      ? `Доступ к устройству «${what}» запрещён для этого сайта.\n\n1. Нажмите «аА» слева от адреса → «Настройки веб-сайта» → ${What} → «Разрешить».\n2. Проверьте: Настройки iPhone → Safari → ${What} → «Разрешить».\n3. Обновите страницу и позвоните снова.`
+      : `Доступ к устройству «${what}» запрещён для этого сайта.\n\nНажмите значок 🔒 слева от адреса → ${What} → «Разрешить», затем обновите страницу.`;
+  }
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return `${What} не найден. Проверьте, что он подключён и включён.`;
+  if (n === 'NotReadableError' || n === 'AbortError') return `${What} занят другим приложением (например, идёт обычный звонок или запись). Закройте его и попробуйте снова.`;
+  return `Не удалось включить ${what}: ${e?.message || n}`;
+}
+function showMediaError(e, what = 'микрофон') {
+  console.warn('media error', e);
+  openModal(`<h3>${what === 'камера' ? '📷' : '🎤'} Нет доступа: ${esc(what)}</h3>
+    <div class="modal-body"><p style="white-space:pre-line;font-size:14px;margin:0 0 8px">${esc(mediaErrorText(e, what))}</p>
+    <p class="muted">Код ошибки: ${esc(e?.name || 'неизвестно')}</p></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Понятно</button></div>`,
+    (root) => { root.querySelector('[data-close]').onclick = closeModal; });
+}
+function requestMic() {
+  if (!navigator.mediaDevices?.getUserMedia) return Promise.reject(Object.assign(new Error('mediaDevices недоступны'), { name: 'Unsupported' }));
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+}
+async function publishMic(room, stream) {
+  const LK = window.LivekitClient;
+  await room.localParticipant.publishTrack(stream.getAudioTracks()[0], { source: LK.Track.Source.Microphone });
+}
+
 async function joinCall(chat) {
   if (call.chat === chat || call.joining) return; // защита от двойного входа
+  // Микрофон запрашиваем сразу, в момент нажатия: iPhone не разрешает запрос «потом»
+  const micPromise = requestMic();
+  micPromise.catch(() => {});
   if (call.chat) {
-    if (!confirm('Вы уже в звонке. Завершить его и перейти в новый?')) return;
+    if (!confirm('Вы уже в звонке. Завершить его и перейти в новый?')) {
+      micPromise.then((s) => s.getTracks().forEach((t) => t.stop()), () => {});
+      return;
+    }
     await leaveCall();
   }
   hideIncoming();
@@ -1581,12 +1620,23 @@ async function joinCall(chat) {
       .on(LK.RoomEvent.ActiveSpeakersChanged, renderSpeaking)
       .on(LK.RoomEvent.TrackMuted, renderCall).on(LK.RoomEvent.TrackUnmuted, renderCall)
       .on(LK.RoomEvent.LocalTrackPublished, renderCall).on(LK.RoomEvent.LocalTrackUnpublished, renderCall)
-      .on(LK.RoomEvent.Disconnected, () => { if (call.room === room) cleanupCall(); });
+      .on(LK.RoomEvent.Disconnected, () => { if (call.room === room) cleanupCall(); })
+      .on(LK.RoomEvent.AudioPlaybackStatusChanged, () => $('#callSound').classList.toggle('hidden', room.canPlaybackAudio));
     await room.connect(tok.url, tok.token);
     $('#callTitle').textContent = chatTitle(chat);
     $('#callPanel').classList.remove('hidden');
-    room.localParticipant.setMicrophoneEnabled(true).then(renderCall)
-      .catch(() => { call.mic = false; renderCall(); toast('Нет доступа к микрофону: разрешите его в настройках браузера'); });
+    room.startAudio().catch(() => {});
+    $('#callSound').classList.toggle('hidden', room.canPlaybackAudio);
+    micPromise.then(async (stream) => {
+      if (call.room !== room) { stream.getTracks().forEach((t) => t.stop()); return; }
+      try { await publishMic(room, stream); call.mic = true; }
+      catch (e) {
+        console.warn('publish mic', e);
+        call.mic = false;
+        toast('Не удалось передать звук на сервер звонков. Проверьте интернет и нажмите 🎤 ещё раз.');
+      }
+      renderCall();
+    }, (e) => { call.mic = false; renderCall(); showMediaError(e, 'микрофон'); });
     call.timer = setInterval(() => {
       const s = Math.floor((Date.now() - call.started) / 1000);
       $('#callTimer').textContent = `${pad(Math.floor(s / 60))}:${pad(s % 60)}` + (room.remoteParticipants.size ? '' : ' · ожидание…');
@@ -1669,16 +1719,24 @@ function renderSpeaking() {
 }
 $('#callMic').onclick = async () => {
   if (!call.room) return;
-  try { call.mic = !call.mic; await call.room.localParticipant.setMicrophoneEnabled(call.mic); }
-  catch { call.mic = false; toast('Нет доступа к микрофону'); }
+  const room = call.room, LK = window.LivekitClient;
+  if (!room.localParticipant.getTrackPublication(LK.Track.Source.Microphone)) {
+    // микрофон ещё не подключён (не разрешили или сбой) — пробуем снова, прямо по нажатию
+    try { await publishMic(room, await requestMic()); call.mic = true; }
+    catch (e) { call.mic = false; if (e?.name) showMediaError(e, 'микрофон'); else toast('Не удалось передать звук. Проверьте интернет.'); }
+    return renderCall();
+  }
+  try { call.mic = !call.mic; await room.localParticipant.setMicrophoneEnabled(call.mic); }
+  catch (e) { call.mic = false; showMediaError(e, 'микрофон'); }
   renderCall();
 };
 $('#callCam').onclick = async () => {
   if (!call.room) return;
   try { call.cam = !call.cam; await call.room.localParticipant.setCameraEnabled(call.cam); }
-  catch { call.cam = false; toast('Нет доступа к камере'); }
+  catch (e) { call.cam = false; showMediaError(e, 'камера'); }
   renderCall();
 };
+$('#callSound').onclick = () => { call.room?.startAudio().then(() => $('#callSound').classList.add('hidden')).catch(() => {}); };
 $('#callScreen').onclick = async () => {
   if (!call.room) return;
   try { call.screen = !call.screen; await call.room.localParticipant.setScreenShareEnabled(call.screen); }
