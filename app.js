@@ -25,6 +25,120 @@ const state = {
   replyTo: null, editing: null,
 };
 
+
+// ---------- Оформление: тема, цвет, подложка (хранится в профиле, кэш — в браузере) ----------
+const ACCENTS = [
+  ['blue', 'Синий', '#4a78ff', '#6b5cf6'], ['shtark', 'Shtark', '#3b82f6', '#1d4ed8'], ['emerald', 'Изумруд', '#10b981', '#0d9488'],
+  ['sunset', 'Закат', '#f97316', '#ec4899'], ['violet', 'Фиолетовый', '#8b5cf6', '#d946ef'], ['ocean', 'Бирюза', '#06b6d4', '#3b82f6'],
+  ['ruby', 'Рубин', '#ef4444', '#f97316'], ['graphite', 'Графит', '#64748b', '#1e293b'],
+];
+const WALLS = [['dots', 'Точки'], ['plain', 'Однотонная'], ['grid', 'Клетка'], ['waves', 'Волны'], ['shtark', 'Shtark'],
+  ['dawn', 'Рассвет'], ['ocean', 'Океан'], ['mint', 'Мята'], ['sand', 'Песок'], ['night', 'Ночь']];
+const prefsDefault = { mode: 'auto', accent: 'blue', wall: 'dots', wallUrl: '' };
+let prefs = (() => { try { return { ...prefsDefault, ...JSON.parse(localStorage.getItem('sl-prefs') || '{}') }; } catch { return { ...prefsDefault }; } })();
+const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+function applyPrefs() {
+  const root = document.documentElement;
+  const dark = prefs.mode === 'dark' || (prefs.mode === 'auto' && darkMq.matches);
+  root.dataset.theme = dark ? 'dark' : 'light';
+  const a = ACCENTS.find((x) => x[0] === prefs.accent) || ACCENTS[0];
+  root.style.setProperty('--accent', a[2]);
+  root.style.setProperty('--accent-2', a[3]);
+  root.style.setProperty('--grad', `linear-gradient(135deg, ${a[2]} 0%, ${a[3]} 100%)`);
+  if (!dark) root.style.setProperty('--accent-soft', `color-mix(in srgb, ${a[2]} 12%, white)`); else root.style.removeProperty('--accent-soft');
+  const cv = document.getElementById('chatView');
+  if (cv) {
+    cv.className = cv.className.replace(/\bwall-\S+/g, '').trim();
+    const w = prefs.wall === 'custom' && prefs.wallUrl ? 'custom' : (WALLS.some((x) => x[0] === prefs.wall) ? prefs.wall : 'dots');
+    if (w !== 'dots') cv.classList.add('wall-' + w);
+    cv.style.backgroundImage = w === 'custom' ? `linear-gradient(rgba(0,0,0,.08), rgba(0,0,0,.08)), url("${prefs.wallUrl.replace(/"/g, '')}")` : '';
+  }
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0d1220' : '#1f2430');
+}
+darkMq.addEventListener?.('change', () => prefs.mode === 'auto' && applyPrefs());
+applyPrefs();
+let prefsTimer = null;
+function setPrefs(patch) {
+  prefs = { ...prefs, ...patch };
+  try { localStorage.setItem('sl-prefs', JSON.stringify(prefs)); } catch {}
+  applyPrefs();
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => sb.rpc('sl_set_prefs', { p: prefs }).then(({ error }) => error && toast(humanError(error))), 600);
+}
+function loadPrefsFromProfile(row) {
+  if (!row?.prefs || !Object.keys(row.prefs).length) return;
+  prefs = { ...prefsDefault, ...row.prefs };
+  try { localStorage.setItem('sl-prefs', JSON.stringify(prefs)); } catch {}
+  applyPrefs();
+}
+function openAppearance() {
+  const draw = (root) => {
+    root.querySelector('#apBody').innerHTML = `
+      <div class="disc-title">Тема</div>
+      <div class="ap-mode">${[['light', '☀️ Светлая'], ['dark', '🌙 Тёмная'], ['auto', '⚙️ Как в системе']].map(([k, t]) => `<button data-mode="${k}" class="${prefs.mode === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <div class="disc-title">Цвет оформления</div>
+      <div class="ap-row">${ACCENTS.map(([k, t, c1, c2]) => `<div class="ap-sw ${prefs.accent === k ? 'on' : ''}" data-accent="${k}" title="${t}" style="background:linear-gradient(135deg, ${c1}, ${c2})"></div>`).join('')}</div>
+      <div class="disc-title">Подложка под сообщениями</div>
+      <div class="ap-walls">
+        ${WALLS.map(([k, t]) => `<div class="ap-wall wall-prev-${k} ${k === 'night' ? 'night' : ''} ${prefs.wall === k ? 'on' : ''}" data-wall="${k}"><span class="bub"></span><span class="bub2"></span>${t}</div>`).join('')}
+        <div class="ap-wall custom ${prefs.wall === 'custom' ? 'on' : ''}" data-wall="custom" style="${prefs.wallUrl ? `background:url('${esc(prefs.wallUrl)}') center/cover` : 'background:linear-gradient(135deg,#94a3b8,#475569)'}"><span class="bub"></span>${prefs.wallUrl ? 'Своё фото' : '📷 Своё фото'}</div>
+      </div>
+      <input type="file" id="apFile" accept="image/*" hidden>
+      <div class="muted" id="apMsg">Настройки сохраняются в вашем профиле и действуют на всех ваших устройствах.</div>`;
+    // превью подложек — те же стили, что у чата
+    root.querySelectorAll('.ap-wall[data-wall]:not(.custom)').forEach((el) => {
+      const probe = document.createElement('div'); probe.id = 'chatView'; probe.className = el.dataset.wall === 'dots' ? '' : 'wall-' + el.dataset.wall;
+      probe.style.display = 'none'; document.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      el.style.backgroundColor = cs.backgroundColor; el.style.backgroundImage = cs.backgroundImage; el.style.backgroundSize = cs.backgroundSize;
+      probe.remove();
+    });
+    root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => { setPrefs({ mode: b.dataset.mode }); draw(root); });
+    root.querySelectorAll('[data-accent]').forEach((b) => b.onclick = () => { setPrefs({ accent: b.dataset.accent }); draw(root); });
+    root.querySelectorAll('[data-wall]').forEach((b) => b.onclick = () => {
+      if (b.dataset.wall === 'custom' && !prefs.wallUrl) return root.querySelector('#apFile').click();
+      if (b.dataset.wall === 'custom' && prefs.wall === 'custom') return root.querySelector('#apFile').click(); // повторное нажатие — сменить фото
+      setPrefs({ wall: b.dataset.wall }); draw(root);
+    });
+    root.querySelector('#apFile').onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const msg = root.querySelector('#apMsg');
+      msg.textContent = 'Загрузка фото…';
+      try {
+        const blob = await fitJpeg(f, 1600);
+        const path = `${state.me.id}/wall-${crypto.randomUUID()}.jpg`;
+        const up = await sb.storage.from('sl-avatars').upload(path, blob, { contentType: 'image/jpeg' });
+        if (up.error) throw up.error;
+        setPrefs({ wall: 'custom', wallUrl: sb.storage.from('sl-avatars').getPublicUrl(path).data.publicUrl });
+        draw(root);
+      } catch (er) { msg.textContent = humanError(er); }
+    };
+  };
+  openModal(`<h3>🎨 Оформление</h3><div class="modal-body" id="apBody"></div>
+    <div class="modal-foot"><button class="secondary" id="apReset">Сбросить</button><span class="spacer"></span><button class="primary" data-close>Готово</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelector('#apReset').onclick = () => { setPrefs({ ...prefsDefault }); draw(root); };
+    draw(root);
+  });
+}
+// Уменьшение фото до заданной ширины (для подложки)
+function fitJpeg(file, max) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b && b.size < 2e6 ? resolve(b) : reject(new Error('Фото слишком большое'))), 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Это не похоже на фото')); };
+    img.src = url;
+  });
+}
+
 // ---------- Утилиты ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const linkify = (s) => esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
@@ -418,6 +532,7 @@ ${body}</html>`;
 $('#meName').onclick = openMyProfile;
 $('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
 $('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
+$('#navLook').onclick = () => { setSidebar(false); openAppearance(); };
 
 // ---------- Старт ----------
 async function start() {
@@ -430,6 +545,7 @@ async function start() {
     return;
   }
   state.me = profileFromRow(me);
+  loadPrefsFromProfile(me);
   const [users, channels, groups, members] = await Promise.all([
     sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday'),
     sb.from('sl_channels').select('id, name, readonly').order('id'),
@@ -837,6 +953,7 @@ function openGroupSettings(groupId) {
 // ---------- Переписка ----------
 function showView(view) {
   state.view = view;
+  setTimeout(tellSw, 0);
   $('#chatView').classList.toggle('hidden', view !== 'chat');
   $('#calView').classList.toggle('hidden', view !== 'calendar');
   $('#taskView').classList.toggle('hidden', view !== 'tasks');
@@ -935,7 +1052,17 @@ function onMessageDeleted(id) {
   }
 }
 
+// Сообщаем service worker, какой чат открыт на экране: о нём push не показываем
+function tellSw() {
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'state', chat: state.view === 'chat' && !document.hidden ? state.current : null });
+  } catch {}
+}
+document.addEventListener('visibilitychange', tellSw);
+window.addEventListener('focus', tellSw);
+
 async function openChat(chat) {
+  setTimeout(tellSw, 0);
   if (!chat || !chatTitle(chat)) chat = `c:${state.channels[0]?.id}`;
   if (chat !== state.current) { state.replyTo = null; state.editing = null; renderComposerBar(); }
   showView('chat');
@@ -3137,6 +3264,8 @@ function stopRingtone() {
 
 // ---------- Уведомления ----------
 function localNotify(title, body, tag, url, onClick) {
+  // при включённых push уведомление придёт с сервера — не дублируем (кроме напоминаний календаря)
+  if (state.push.sub && !String(tag).startsWith('ev')) return;
   if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   if (state.push.reg) {
     state.push.reg.showNotification(title, { body, tag, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: new URL(url, location.href).href } }).catch(() => {});

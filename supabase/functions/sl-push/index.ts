@@ -4,8 +4,7 @@
 //    { action: 'vapid' } — открытый ключ; 'subscribe' { sub }; 'unsubscribe' { endpoint };
 //    'test' — тестовое уведомление себе; 'ring' { chat } — «входящий звонок» тем, у кого приложение закрыто;
 //    'invite' { chat, user } — приглашение в уже идущий звонок.
-// Тем, кто сейчас в приложении (last_active < 30 с), push не отправляется — вкладка покажет уведомление сама.
-// Кроме входящих звонков: о них сообщаем всегда.
+// Push получают все участники (кроме тех, у кого тихие часы); уведомление об открытом на экране чате скрывает service worker.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3.6.7';
 
@@ -68,11 +67,11 @@ async function send(userIds: string[], p: Payload, { force = false } = {}) {
   let ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return 0;
   if (!force) {
-    const since = Date.now() - 30_000;
-    const { data: profs } = await db.from('sl_profiles').select('id, last_active, dnd, dnd_from, dnd_to').in('id', ids);
+    // уведомления получают все, в том числе с открытым приложением (лишнее на экране отсекает service worker);
+    // пропускаем только тех, у кого сейчас тихие часы «Не беспокоить»
+    const { data: profs } = await db.from('sl_profiles').select('id, dnd, dnd_from, dnd_to').in('id', ids);
     const now = localHm(await tz());
-    const skip = new Set((profs || []).filter((a: any) =>
-      (a.last_active && Date.parse(a.last_active) > since) || (a.dnd && inQuiet(now, a.dnd_from, a.dnd_to))).map((a: any) => a.id));
+    const skip = new Set((profs || []).filter((a: any) => a.dnd && inQuiet(now, a.dnd_from, a.dnd_to)).map((a: any) => a.id));
     ids = ids.filter((id) => !skip.has(id));
     if (!ids.length) return 0;
   }

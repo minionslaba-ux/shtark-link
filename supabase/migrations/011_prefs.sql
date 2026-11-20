@@ -1,0 +1,1 @@
+-- Оформление: sl_profiles.prefs (тема, цвет, подложка) и sl_set_prefs. Применено миграцией shtark_link_prefs.

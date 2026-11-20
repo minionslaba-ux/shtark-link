@@ -4,6 +4,9 @@ const SCOPE = self.registration.scope;
 const rel = (u) => new URL(String(u || '').replace(/^\//, ''), SCOPE).href;
 
 self.addEventListener('install', () => self.skipWaiting());
+// какой чат открыт на экране в каждой вкладке/окне приложения
+const openChats = new Map(); // id клиента -> чат
+self.addEventListener('message', (e) => { if (e.data && e.data.type === 'state' && e.source) openChats.set(e.source.id, e.data.chat || null); });
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', (event) => {
@@ -15,11 +18,14 @@ self.addEventListener('push', (event) => {
       const old = await self.registration.getNotifications();
       old.filter((n) => n.data && n.data.group === data.group).forEach((n) => n.close());
     }
-    // повтор звонка не нужен, если приложение открыто на экране (там играет своя мелодия) — кроме iPhone: он требует показывать каждое уведомление
-    if (data.seq) {
+    // не показываем: повтор звонка, когда приложение на экране (там играет своя мелодия),
+    // и сообщение из чата, который сейчас открыт на экране. iPhone требует показывать каждое уведомление — там показываем всегда.
+    const apple = /iPhone|iPad|Macintosh/.test(self.navigator.userAgent);
+    if (!apple) {
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const apple = /iPhone|iPad|Macintosh/.test(self.navigator.userAgent);
-      if (!apple && wins.some((w) => w.visibilityState === 'visible')) return;
+      const visible = wins.filter((w) => w.visibilityState === 'visible');
+      if (data.seq && visible.length) return;
+      if (data.tag && visible.some((w) => w.focused && openChats.get(w.id) === data.tag)) return;
     }
     await self.registration.showNotification(data.title || 'Shtark Link', {
     body: data.body || '',
