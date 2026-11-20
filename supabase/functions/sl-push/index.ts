@@ -45,6 +45,17 @@ async function vapid() {
   return vapidCache;
 }
 
+// «Не беспокоить»: тихие часы по местному времени компании
+let tzCache = '';
+async function tz() { return tzCache || (tzCache = (await setting('tz')) || 'Europe/Moscow'); }
+function localHm(zone: string) {
+  return new Intl.DateTimeFormat('ru-RU', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+}
+function inQuiet(now: string, from: string, to: string) {
+  if (!from || !to || from === to) return false;
+  return from < to ? now >= from && now < to : now >= from || now < to; // через полночь: 22:00–08:00
+}
+
 async function names(ids: string[]) {
   const { data } = await db.from('sl_profiles').select('id, name').in('id', ids);
   return new Map((data || []).map((p: { id: string; name: string }) => [p.id, p.name]));
@@ -56,9 +67,11 @@ async function send(userIds: string[], p: Payload, { force = false } = {}) {
   let ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return 0;
   if (!force) {
-    const since = new Date(Date.now() - 30_000).toISOString();
-    const { data: active } = await db.from('sl_profiles').select('id').in('id', ids).gt('last_active', since);
-    const skip = new Set((active || []).map((a: { id: string }) => a.id));
+    const since = Date.now() - 30_000;
+    const { data: profs } = await db.from('sl_profiles').select('id, last_active, dnd, dnd_from, dnd_to').in('id', ids);
+    const now = localHm(await tz());
+    const skip = new Set((profs || []).filter((a: any) =>
+      (a.last_active && Date.parse(a.last_active) > since) || (a.dnd && inQuiet(now, a.dnd_from, a.dnd_to))).map((a: any) => a.id));
     ids = ids.filter((id) => !skip.has(id));
     if (!ids.length) return 0;
   }
@@ -112,10 +125,21 @@ async function onHook(b: any) {
     const author = nm.get(n.user_id) || 'Сотрудник';
     const text = n.text || (n.file ? '📎 ' + n.file.name : '');
     const title = await chatTitle(n.chat);
-    const to = (await members(n.chat)).filter((id) => id !== n.user_id);
-    return send(to, title
+    const all = (await members(n.chat)).filter((id) => id !== n.user_id);
+    // упомянутым и тем, кому ответили — отдельное уведомление
+    let direct: string[] = (n.mentions || []).filter((id: string) => all.includes(id));
+    if (n.reply_to) {
+      const { data: r } = await db.from('sl_messages').select('user_id').eq('id', n.reply_to).maybeSingle();
+      if (r && r.user_id !== n.user_id && all.includes(r.user_id)) direct.push(r.user_id);
+    }
+    direct = [...new Set(direct)];
+    const rest = all.filter((id) => !direct.includes(id));
+    const where = title ? ` в ${title}` : '';
+    const a = direct.length ? await send(direct, { title: `📣 ${author}${where}`, body: short(text), url: `/#chat=${n.chat}`, tag: n.chat }) : 0;
+    const b2 = await send(rest, title
       ? { title, body: short(`${author}: ${text}`), url: `/#chat=${n.chat}`, tag: n.chat }
       : { title: author, body: short(text), url: `/#chat=${n.chat}`, tag: n.chat });
+    return a + b2;
   }
   if (hook === 'sl_tasks') {
     const t = n || o;
@@ -140,6 +164,15 @@ async function onHook(b: any) {
       }
       return send([n.assignee_id].filter((id) => id !== actor), { title: '✏️ Задача изменена', body: `${who}: ${n.title} — срок ${due}`, url, tag });
     }
+  }
+  // готовые уведомления из базы (напоминания о сроках, созвоны, объявления, дни рождения)
+  if (hook === 'notify') {
+    let total = 0;
+    for (const it of (b.items || []) as any[]) {
+      total += await send(it.users || [], { title: String(it.title || 'Shtark Link'), body: String(it.body || ''), url: String(it.url || '/'),
+        tag: String(it.tag || 'sl'), ...(it.force ? { urgency: 'high' } : {}) }, { force: !!it.force });
+    }
+    return total;
   }
   if (hook === 'sl_task_comments' && op === 'INSERT') {
     const { data: t } = await db.from('sl_tasks').select('id, title, created_by, assignee_id').eq('id', n.task_id).maybeSingle();

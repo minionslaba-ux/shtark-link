@@ -1,0 +1,12 @@
+-- Shtark Link v2: ответы, правка, реакции, «прочитано», закреп, упоминания, каналы только для чтения,
+-- задачи (повтор, файлы, связь с сообщением, напоминания), статусы и «не беспокоить», справочник,
+-- запланированные созвоны, история звонков, объявления с ознакомлением, дни рождения.
+-- Применено в проекте миграциями shtark_link_features_v2_messages, shtark_link_features_v2_rest,
+-- shtark_link_fix_reply_policy, shtark_link_task_source_note (полный текст — в истории миграций Supabase).
+-- Основное:
+--   sl_messages: reply_to, edited_at, pinned_at, pinned_by, mentions; sl_channels.readonly
+--   sl_reactions, sl_reads (+ sl_mark_read, sl_unread), sl_edit_message, sl_pin_message
+--   sl_tasks: repeat, files, source_chat, source_msg, reminded; sl_update_task (повтор и файлы); sl_task_source_note
+--   sl_profiles: status_text/emoji/until, dnd/dnd_from/dnd_to, phone, department, birthday; sl_set_profile
+--   sl_events.call_chat; sl_calls + sl_call_event; sl_announcements, sl_acks; sl_set_channel_readonly
+--   sl_notify (push из базы), sl_tick (cron каждые 5 мин), sl_birthdays (cron 06:03 UTC)
