@@ -561,7 +561,7 @@ async function start() {
   loadPrefsFromProfile(me);
   const [users, channels, groups, members] = await Promise.all([
     sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday'),
-    sb.from('sl_channels').select('id, name, readonly, is_public, auto_join').order('id'),
+    sb.from('sl_channels').select('id, name, readonly, is_public, auto_join, created_by').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
   ]);
@@ -736,6 +736,7 @@ function onProfileChange(p) {
 }
 
 async function onGroupChange(p) {
+  if (p.eventType === 'DELETE' && p.old?.id) { onChatDeleted(`g:${p.old.id}`); return; }
   if (p.eventType === 'UPDATE') {
     const g = state.groups.get(p.new.id);
     if (g) { g.name = p.new.name; renderSidebar(); if (state.current === `g:${g.id}`) renderChatHeader(); }
@@ -881,22 +882,42 @@ $('#navCalendar').onclick = () => openCalendar();
 $('#navTasks').onclick = () => openTasks();
 $('#navAdmin').onclick = () => openAdmin();
 
+// ---------- Удаление канала или чата (администратор или создатель) ----------
+async function deleteChat(chat) {
+  const title = chatTitle(chat);
+  if (!confirm(`Удалить ${chat.startsWith('c:') ? 'канал' : 'чат'} «${title}» вместе со всей перепиской?\n\nЭто нельзя отменить — сообщения и файлы пропадут у всех участников.`)) return;
+  try { await rpc('sl_delete_chat', { p_chat: chat }); closeModal(); onChatDeleted(chat); toast(`«${title}» удалён`); }
+  catch (e) { toast(humanError(e)); }
+}
+function onChatDeleted(chat) {
+  if (chat.startsWith('g:')) state.groups.delete(Number(chat.slice(2)));
+  else state.channels = state.channels.filter((c) => `c:${c.id}` !== chat);
+  state.messages.delete(chat); state.unread.delete(chat);
+  renderSidebar();
+  if (state.current === chat) openChat(`c:${state.channels[0]?.id}`);
+}
+const canDeleteChat = (chat) => {
+  if (state.me.isAdmin) return true;
+  if (chat.startsWith('g:')) return state.groups.get(Number(chat.slice(2)))?.createdBy === state.me.id;
+  return state.channels.find((c) => `c:${c.id}` === chat)?.createdBy === state.me.id;
+};
+
 // ---------- Каналы: «для всех» или только для участников ----------
-const chanFromRow = (c) => ({ id: c.id, name: c.name, readonly: !!c.readonly, isPublic: !!c.is_public, autoJoin: !!c.auto_join, members: [] });
+const chanFromRow = (c) => ({ id: c.id, name: c.name, readonly: !!c.readonly, isPublic: !!c.is_public, autoJoin: !!c.auto_join, createdBy: c.created_by, members: [] });
 async function loadChannelMembers() {
   const { data } = await sb.from('sl_channel_members').select('channel_id, user_id');
   state.channels.forEach((c) => { c.members = (data || []).filter((m) => m.channel_id === c.id).map((m) => m.user_id); });
 }
 async function reloadChannels() {
   try {
-    const rows = check(await sb.from('sl_channels').select('id, name, readonly, is_public, auto_join').order('id'));
+    const rows = check(await sb.from('sl_channels').select('id, name, readonly, is_public, auto_join, created_by').order('id'));
     state.channels = rows.map(chanFromRow);
     await loadChannelMembers();
   } catch { return; }
   renderSidebar();
   if (state.view === 'admin') renderChannelsAdmin();
   if (state.current?.startsWith('c:') && !state.channels.some((c) => `c:${c.id}` === state.current)) {
-    toast('Вас убрали из канала'); openChat(`c:${state.channels[0]?.id}`);
+    toast('Канал недоступен: его удалили или вас убрали из него'); openChat(`c:${state.channels[0]?.id}`);
   } else if (state.view === 'chat' && state.current?.startsWith('c:')) renderChatHeader();
 }
 function channelFormHtml(c = {}) {
@@ -948,13 +969,14 @@ function openChannelSettings(id) {
     return openModal(`<h3># ${esc(c.name)}</h3><div class="modal-body">
       <p class="muted">${c.isPublic ? 'Канал для всех сотрудников.' : `Участников: ${list.length}. Состав канала меняет администратор.`}</p>
       ${c.isPublic ? '' : `<div class="people">${list.map((u) => `<div class="person" style="cursor:default">${avatar(u, 'sm')}<span class="pname">${esc(u.name)}</span><span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></div>`).join('')}</div>`}
-      </div><div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
-      (root) => root.querySelector('[data-close]').onclick = closeModal);
+      </div><div class="modal-foot">${canDeleteChat(`c:${id}`) ? '<button class="danger" id="chDel">Удалить канал</button>' : ''}<span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+      (root) => { root.querySelector('[data-close]').onclick = closeModal; const d = root.querySelector('#chDel'); if (d) d.onclick = () => deleteChat(`c:${id}`); });
   }
   openModal(`<h3>Канал # ${esc(c.name)}</h3><div class="modal-body">${channelFormHtml(c)}<div class="modal-err" id="mErr"></div></div>
-    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="mOk">Сохранить</button></div>`,
+    <div class="modal-foot"><button class="danger" id="chDel">Удалить канал</button><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="mOk">Сохранить</button></div>`,
   (root) => {
     root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelector('#chDel').onclick = () => deleteChat(`c:${id}`);
     const read = mountChannelForm(root);
     root.querySelector('#mOk').onclick = async () => {
       const f = read();
@@ -1004,7 +1026,7 @@ function openGroupSettings(groupId) {
       <div class="field"><span>Добавить участников</span>${peoplePicker(g.members)}</div>
       <div class="modal-err" id="mErr"></div>
     </div>
-    <div class="modal-foot"><button class="danger" id="mLeave">Покинуть чат</button><span class="spacer"></span>
+    <div class="modal-foot"><button class="danger" id="mLeave">Покинуть чат</button>${canDeleteChat(`g:${g.id}`) ? '<button class="danger" id="mDel">Удалить чат</button>' : ''}<span class="spacer"></span>
       <button class="secondary" data-close>Закрыть</button><button class="primary" id="mAdd">Добавить</button></div>`,
     (root) => {
       const err = (e) => root.querySelector('#mErr').textContent = humanError(e);
@@ -1019,6 +1041,8 @@ function openGroupSettings(groupId) {
         try { await rpc('sl_add_group_members', { p_group: g.id, p_members: ids }); ids.forEach((id) => g.members.includes(id) || g.members.push(id)); closeModal(); renderChatHeader(); }
         catch (e) { err(e); }
       };
+      const del = root.querySelector('#mDel');
+      if (del) del.onclick = () => deleteChat(`g:${g.id}`);
       root.querySelector('#mLeave').onclick = async () => {
         if (!confirm(`Покинуть чат «${g.name}»? Историю переписки вы больше не увидите.`)) return;
         try {
