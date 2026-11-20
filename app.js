@@ -1550,7 +1550,7 @@ function loadLiveKit() {
   if (window.LivekitClient) return Promise.resolve();
   if (!lkLoading) lkLoading = new Promise((ok, fail) => {
     const s = document.createElement('script');
-    s.src = 'vendor/livekit-client.umd.js';
+    s.src = 'vendor/livekit-client.umd.js?v=' + APP_VERSION;
     s.onload = ok; s.onerror = () => fail(new Error('Не удалось загрузить модуль звонков'));
     document.head.appendChild(s);
   });
@@ -1631,11 +1631,26 @@ async function collectCallDiag() {
   sb.from('sl_call_diag').upsert({ user_id: state.me.id, device: deviceId, chat, data, updated_at: new Date().toISOString() }).then(() => {}, () => {});
 }
 
+function unlockAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    const ctx = new AC();
+    // короткая тишина — «пинок», после которого iOS считает звук разрешённым
+    const buf = ctx.createBuffer(1, 1, 22050), src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination); src.start(0);
+    ctx.resume?.();
+    return ctx;
+  } catch { return null; }
+}
+
 async function joinCall(chat) {
   if (call.chat === chat || call.joining) return; // защита от двойного входа
   // Микрофон запрашиваем сразу, в момент нажатия: iPhone не разрешает запрос «потом»
   const micPromise = requestMic();
   micPromise.catch(() => {});
+  // iPhone разрешает звук, только если его «включили» прямо в момент нажатия — делаем это сразу
+  const audioCtx = unlockAudio();
   if (call.chat) {
     if (!confirm('Вы уже в звонке. Завершить его и перейти в новый?')) {
       micPromise.then((s) => s.getTracks().forEach((t) => t.stop()), () => {});
@@ -1648,7 +1663,11 @@ async function joinCall(chat) {
   try {
     const [tok] = await Promise.all([fn('sl-call-token', { chat }), loadLiveKit()]);
     const LK = window.LivekitClient;
-    const room = new LK.Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true } });
+    const room = new LK.Room({
+      adaptiveStream: true, dynacast: true,
+      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true },
+      webAudioMix: audioCtx ? { audioContext: audioCtx } : false, // звук собеседников идёт через уже разблокированный AudioContext
+    });
     call.chat = chat; call.room = room; call.started = Date.now(); call.mic = true; call.micError = null; call.cam = false; call.screen = false;
     room
       .on(LK.RoomEvent.TrackSubscribed, (track) => { if (track.kind === 'audio') $('#callAudio').appendChild(track.attach()); renderCall(); })
@@ -1699,6 +1718,8 @@ async function joinCall(chat) {
   } catch (e) {
     cleanupCall();
     toast('Звонок не удался: ' + humanError(e));
+    sb.from('sl_call_diag').upsert({ user_id: state.me.id, device: deviceId, chat, updated_at: new Date().toISOString(),
+      data: { ua: navigator.userAgent.slice(0, 160), standalone: isStandalone, stage: 'join-failed', error: String(e?.message || e) } }).then(() => {}, () => {});
   } finally { call.joining = false; }
 }
 
@@ -1780,6 +1801,13 @@ $('#callCam').onclick = async () => {
   renderCall();
 };
 $('#callSound').onclick = () => { call.room?.startAudio().then(() => $('#callSound').classList.add('hidden')).catch(() => {}); };
+// на iPhone любое касание окна звонка «размораживает» звук, если браузер его придержал
+$('#callPanel').addEventListener('pointerdown', () => {
+  const r = call.room;
+  if (!r) return;
+  r.startAudio?.().catch(() => {});
+  document.querySelectorAll('#callAudio audio').forEach((a) => a.paused && a.play().catch(() => {}));
+});
 $('#callScreen').onclick = async () => {
   if (!call.room) return;
   try { call.screen = !call.screen; await call.room.localParticipant.setScreenShareEnabled(call.screen); }
@@ -2011,6 +2039,19 @@ function checkReminders() {
     }
   }
 }
+
+// ---------- Автообновление: если на сайте новая версия — перезагрузиться (не во время звонка) ----------
+const APP_VERSION = (document.querySelector('script[src^="app.js"]')?.getAttribute('src').split('v=')[1]) || '';
+async function checkUpdate() {
+  if (!APP_VERSION || call.room || call.joining) return;
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const { v } = await r.json();
+    if (v && v !== APP_VERSION && !call.room) location.reload();
+  } catch {}
+}
+setInterval(checkUpdate, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
 
 // ---------- Запуск ----------
 sb.auth.getSession().then(({ data }) => { if (data.session) start().catch((e) => { $('#authError').textContent = humanError(e); }); });
