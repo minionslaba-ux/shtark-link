@@ -1,1 +1,2 @@
 -- Push по делам календаря: sl_events.notified, sl_event_audience, sl_tick (за 15 мин / в 9:00), триггер sl_event_push (новое общее дело, сброс при переносе). Применено миграцией shtark_link_event_push.
+-- Исправление: sl_event_audience(p_shared, p_user) вместо записи; sl_tick обновлён. Применено миграцией shtark_link_event_push_fix.
