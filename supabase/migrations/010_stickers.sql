@@ -1,0 +1,1 @@
+-- Стикеры: sl_messages.sticker (id стикера из папки stickers/). Применено миграцией shtark_link_stickers.

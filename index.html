@@ -692,6 +692,25 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
+  /* Стикеры */
+  .composer { position: relative; }
+  .sticker-pop { position: absolute; right: 20px; bottom: calc(100% - 4px); width: min(420px, calc(100vw - 24px)); max-height: 360px; overflow-y: auto; background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); padding: 10px 12px 12px; z-index: 20; animation: popIn .22s var(--ease-out); transform-origin: bottom right; }
+  .sp-head { font-size: 13px; color: var(--muted); padding: 2px 4px 8px; }
+  .sp-head b { color: var(--accent); }
+  .sp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .sp-grid button { border: 0; background: none; padding: 4px; border-radius: 14px; transition: transform .18s var(--ease-spring), background .15s; }
+  .sp-grid button:hover { background: var(--accent-soft); transform: scale(1.08) rotate(-2deg); }
+  .sp-grid img { width: 100%; display: block; }
+  .msg.has-sticker .body, .msg.mine.has-sticker .body { background: none !important; box-shadow: none !important; padding: 0; }
+  .msg.has-sticker .meta { padding: 0 4px; }
+  .msg.mine.has-sticker .msg-foot .mt { color: var(--muted); }
+  .msg.mine.has-sticker .tick { color: var(--muted); }
+  .msg.mine.has-sticker .tick.read { color: #2563eb; }
+  .msg.has-sticker .react { background: #fff; color: var(--text); border-color: var(--border); }
+  img.sticker { width: 150px; height: 150px; display: block; }
+  .msg.has-sticker.anim .sticker { animation: stickerIn .55s var(--ease-spring) both; }
+  @keyframes stickerIn { 0% { transform: scale(.3) rotate(-12deg); opacity: 0; } 70% { transform: scale(1.08) rotate(3deg); opacity: 1; } 100% { transform: none; } }
+  @media (max-width: 720px) { .sticker-pop { right: 8px; } img.sticker { width: 128px; height: 128px; } .sp-grid { grid-template-columns: repeat(4, 1fr); } }
 </style>
 </head>
 <body>
@@ -752,10 +771,12 @@
         <div id="uploads"></div>
         <div id="replyBar" class="bar hidden"></div>
         <div id="mentionPop" class="mention-pop hidden"></div>
+        <div id="stickerPop" class="sticker-pop hidden"></div>
         <div id="readonlyNote" class="readonly-note hidden">🔒 В этом канале пишут только администраторы</div>
         <div class="input-row">
           <button class="icon-btn" id="attachBtn" title="Прикрепить файл">📎</button>
           <textarea id="input" rows="1" placeholder="Сообщение…" title="Enter — отправить, Shift+Enter — новая строка, ↑ — изменить последнее"></textarea>
+          <button class="icon-btn" id="stickerBtn" title="Стикеры Shtark">😊</button>
           <button class="icon-btn" id="voiceBtn" title="Голосовое сообщение">🎤</button>
           <button class="send-btn" id="sendBtn">Отправить</button>
         </div>
@@ -876,8 +897,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611210110"></script>
-<script src="config.js?v=202611210110"></script>
-<script src="app.js?v=202611210110"></script>
+<script src="vendor/supabase.js?v=202611210150"></script>
+<script src="config.js?v=202611210150"></script>
+<script src="app.js?v=202611210150"></script>
 </body>
 </html>

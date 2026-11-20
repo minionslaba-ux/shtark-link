@@ -886,7 +886,7 @@ function renderChatHeader() {
 function msgFromRow(r) {
   return { id: r.id, chat: r.chat, userId: r.user_id, text: r.text, file: r.file, system: r.system, createdAt: Date.parse(r.created_at),
     replyTo: r.reply_to || null, editedAt: r.edited_at ? Date.parse(r.edited_at) : null, pinnedAt: r.pinned_at ? Date.parse(r.pinned_at) : null,
-    pinnedBy: r.pinned_by || null, mentions: r.mentions || [] };
+    pinnedBy: r.pinned_by || null, mentions: r.mentions || [], sticker: r.sticker || null };
 }
 async function fetchMessages(chat, beforeId) {
   let q = sb.from('sl_messages').select('*').eq('chat', chat).order('id', { ascending: false }).limit(50);
@@ -994,18 +994,18 @@ function messageHtml(m, prev) {
   const canPin = !(isReadonly(m.chat) && !state.me.isAdmin);
   const acts = `<div class="msg-acts">
       <button data-act="react" title="Реакция">😊</button><button data-act="reply" title="Ответить">↩</button>
-      ${mine && !m.file?.voice ? '<button data-act="edit" title="Изменить">✏️</button>' : ''}
+      ${mine && !m.file?.voice && !m.sticker ? '<button data-act="edit" title="Изменить">✏️</button>' : ''}
       ${canPin ? `<button data-act="pin" title="${m.pinnedAt ? 'Открепить' : 'Закрепить'}">📌</button>` : ''}
       <button data-act="task" title="Сделать задачу">📋</button>
       ${mine || state.me.isAdmin ? '<button data-act="del" title="Удалить">🗑</button>' : ''}
     </div>`;
   return dayHtml +
-    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''}" data-id="${m.id}">
+    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''} ${m.sticker ? 'has-sticker' : ''}" data-id="${m.id}">
       ${avatar(u)}
       <div class="body">
         <div class="meta"><b>${esc(u.name)}${u.statusEmoji && statusOf(u) ? ' ' + esc(u.statusEmoji) : ''}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b>${u.position ? `<span class="pos">${esc(u.position)}</span>` : ''}<span>${fmtTime(m.createdAt)}</span>${m.pinnedAt ? '<span title="Закреплено">📌</span>' : ''}</div>
         ${m.replyTo ? quoteHtml(m.replyTo) : ''}
-        ${m.text ? `<div class="text">${richText(m)}</div>` : ''}
+        ${m.sticker ? `<img class="sticker" src="stickers/${esc(m.sticker)}.svg" alt="${esc(m.text)}" title="${esc(m.text)}">` : m.text ? `<div class="text">${richText(m)}</div>` : ''}
         ${file}
         <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont || mine ? fmtTime(m.createdAt) : ''}${mine && m.pinnedAt ? ' 📌' : ''}${mine ? ticksHtml(m) : ''}</span></div>
         ${acts}
@@ -1200,7 +1200,7 @@ $('#input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   if (e.key === 'Escape' && (state.replyTo || state.editing)) { if (state.editing) $('#input').value = ''; state.replyTo = state.editing = null; renderComposerBar(); }
   if (e.key === 'ArrowUp' && !$('#input').value) { // ↑ в пустом поле — изменить своё последнее сообщение
-    const last = [...(state.messages.get(state.current) || [])].reverse().find((m) => m.userId === state.me.id && !m.system && !m.file);
+    const last = [...(state.messages.get(state.current) || [])].reverse().find((m) => m.userId === state.me.id && !m.system && !m.file && !m.sticker);
     if (last) { e.preventDefault(); messageAction('edit', last.id); }
   }
 });
@@ -1581,6 +1581,30 @@ async function startVoice() {
 }
 function stopVoice(cancel) { if (!rec.mr) return; rec.cancel = cancel; rec.mr.stop(); }
 $('#voiceBtn').onclick = startVoice;
+// Фирменные стикеры Shtark
+const STICKERS = [{"id": "ok", "title": "Принято"}, {"id": "done", "title": "Сделано!"}, {"id": "thanks", "title": "Спасибо!"}, {"id": "hi", "title": "Привет!"}, {"id": "morning", "title": "Доброе утро"}, {"id": "day", "title": "Хорошего дня"}, {"id": "call", "title": "Созвонимся?"}, {"id": "work", "title": "В работе"}, {"id": "urgent", "title": "Срочно!"}, {"id": "great", "title": "Отлично!"}, {"id": "lunch", "title": "На обеде"}, {"id": "coffee", "title": "Кофе?"}, {"id": "think", "title": "Подумаю"}, {"id": "wait", "title": "Минутку…"}, {"id": "agree", "title": "Договорились"}, {"id": "team", "title": "Команда Shtark"}];
+function toggleStickers() {
+  const pop = $('#stickerPop');
+  if (!pop.classList.contains('hidden')) return pop.classList.add('hidden');
+  if (!pop.innerHTML) pop.innerHTML = `<div class="sp-head">Стикеры <b>Shtark</b></div><div class="sp-grid">` +
+    STICKERS.map((st) => `<button data-st="${st.id}" title="${esc(st.title)}"><img src="stickers/${st.id}.svg" alt="${esc(st.title)}" loading="lazy"></button>`).join('') + '</div>';
+  pop.classList.remove('hidden');
+  pop.querySelectorAll('[data-st]').forEach((b) => b.onclick = () => { pop.classList.add('hidden'); sendSticker(b.dataset.st); });
+  setTimeout(() => document.addEventListener('pointerdown', function off(e) {
+    if (!pop.contains(e.target) && e.target.id !== 'stickerBtn') { pop.classList.add('hidden'); document.removeEventListener('pointerdown', off); }
+  }), 0);
+}
+async function sendSticker(id) {
+  const st = STICKERS.find((x) => x.id === id), chat = state.current;
+  if (!st || !chat) return;
+  const replyTo = state.replyTo?.id || null;
+  state.replyTo = null; renderComposerBar();
+  try {
+    const row = check(await sb.from('sl_messages').insert({ chat, user_id: state.me.id, text: `Стикер «${st.title}»`, sticker: id, reply_to: replyTo }).select().single());
+    onMessage(msgFromRow(row));
+  } catch (e) { toast('Стикер не отправлен: ' + humanError(e)); }
+}
+$('#stickerBtn').onclick = toggleStickers;
 $('#voiceSend').onclick = () => stopVoice(false);
 $('#voiceCancel').onclick = () => stopVoice(true);
 $('#searchBtn').onclick = openSearch;
