@@ -582,6 +582,7 @@ async function start() {
     if (overdue) toast(`⚠ У вас ${overdue} ${plural(overdue, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, () => { setTaskFilter('mine'); openTasks(); });
   }).catch(() => {});
   renderSidebar();
+  setInterval(() => { if (!document.hidden) loadUnread(); }, 60000); // сверка счётчиков с сервером
   const last = localStorage.getItem('lastChat');
   if (openDeepLink(location.hash)) history.replaceState(null, '', location.pathname);
   else if (last === 'calendar') openCalendar();
@@ -615,7 +616,7 @@ function heartbeat() {
     }
   }).catch(() => {});
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { heartbeat(); updateTitle(); if (state.view === 'chat') markRead(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { heartbeat(); if (state.view === 'chat') markRead(); loadUnread(); } });
 
 sb.auth.onAuthStateChange((event, session) => {
   if (event === 'TOKEN_REFRESHED' && session) sb.realtime.setAuth(session.access_token);
@@ -790,6 +791,10 @@ function notify(m) {
 function updateTitle() {
   const total = [...state.unread.values()].reduce((a, b) => a + b, 0);
   document.title = total ? `(${total}) Shtark Link` : 'Shtark Link';
+  // на телефоне меню скрыто — общее число непрочитанных показываем на кнопке ☰
+  document.querySelectorAll('.menuBtn').forEach((b) => { b.dataset.n = total > 99 ? '99+' : total || ''; });
+  // цифра на иконке установленного приложения
+  try { if (total) navigator.setAppBadge?.(total); else navigator.clearAppBadge?.(); } catch {}
 }
 
 // ---------- Боковая панель ----------
@@ -831,6 +836,7 @@ function renderSidebar() {
   ).join('');
   document.querySelectorAll('.chat-item[data-chat]').forEach((el) => el.onclick = () => openChat(el.dataset.chat));
   state.popChat = null;
+  updateTitle();
   $('#navCalendar').classList.toggle('active', state.view === 'calendar');
   $('#navTasks').classList.toggle('active', state.view === 'tasks');
   $('#navAdmin').classList.toggle('active', state.view === 'admin');

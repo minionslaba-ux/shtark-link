@@ -781,6 +781,12 @@
   [data-theme="dark"] .cal-grid .cell { border-color: var(--border); }
   [data-theme="dark"] table.rep th, [data-theme="dark"] table.rep td { border-color: var(--border); }
   [data-theme="dark"] .push-prompt { background: rgba(255,255,255,.06) !important; }
+  /* счётчик непрочитанных на кнопке меню (телефон) */
+  .menuBtn { position: relative; }
+  .menuBtn[data-n]:not([data-n=""])::after { content: attr(data-n); position: absolute; top: -4px; right: -8px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: #ff4d6d; color: #fff; font: 700 11px/18px Inter, sans-serif; text-align: center; box-shadow: 0 2px 6px rgba(255,77,109,.45); animation: badgePop .45s var(--ease-spring); }
+  .chat-item.unread .label { color: #fff; font-weight: 700; }
+  .badge { min-width: 20px; text-align: center; }
 </style>
 </head>
 <body>
@@ -968,8 +974,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611210345"></script>
-<script src="config.js?v=202611210345"></script>
-<script src="app.js?v=202611210345"></script>
+<script src="vendor/supabase.js?v=202611210400"></script>
+<script src="config.js?v=202611210400"></script>
+<script src="app.js?v=202611210400"></script>
 </body>
 </html>
