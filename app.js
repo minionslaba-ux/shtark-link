@@ -1128,7 +1128,7 @@ function renderChatHeader() {
   $('#readonlyNote').textContent = obs ? (chat.startsWith('d:') ? '👁 Личная переписка сотрудников — просмотр как администратор' : '👁 Вы не участник этого чата — просмотр как администратор') : '🔒 В этом канале пишут только администраторы';
   $('#readonlyNote').classList.toggle('hidden', !ro);
   document.querySelector('#chatView .input-row').classList.toggle('hidden', ro);
-  actions += `<button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
+  actions += `<button class="hbtn" id="aiBtn" title="Кратко: что обсуждали (помощник с ИИ)">✨ <span class="lbl">Кратко</span></button><button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
   $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + ' ' + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
@@ -1142,6 +1142,7 @@ function renderChatHeader() {
   if (cb) cb.onclick = () => joinCall(chat);
   $('#exportBtn').onclick = () => exportChat(chat);
   $('#filesBtn').onclick = () => openChatFiles(chat);
+  $('#aiBtn').onclick = () => openAiSummary(chat);
   renderPinBar();
 }
 
@@ -2644,6 +2645,26 @@ async function flushOutbox() {
 }
 window.addEventListener('online', () => { toast('Связь восстановлена'); flushOutbox(); });
 window.addEventListener('offline', () => toast('⚠ Нет подключения к интернету — сообщения будут ждать отправки'));
+
+// ===================== v3: помощник с ИИ =====================
+function openAiSummary(chat) {
+  const unread = state.unread.get(chat) || 0;
+  openModal(`<h3>✨ Кратко: ${esc(chatTitle(chat))}</h3><div class="modal-body">
+    <div class="presets"><button class="hbtn" data-mode="missed">Что я пропустил${unread ? ` (${unread})` : ''}</button><button class="hbtn" data-mode="recent">Последние сообщения</button></div>
+    <div id="aiOut" class="kb-body"><p class="muted">Помощник прочитает переписку и коротко перескажет главное: решения, задачи, открытые вопросы.</p></div></div>
+    <div class="modal-foot"><span class="muted" style="font-size:12px">Краткое содержание составляет ИИ — проверяйте важное в самой переписке.</span><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = async () => {
+      const out = root.querySelector('#aiOut');
+      root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = true);
+      out.innerHTML = '<p class="muted"><span class="typing-dots"><i></i><i></i><i></i></span> Читаю переписку…</p>';
+      try { const r = await fn('sl-ai', { action: 'summary', chat, mode: b.dataset.mode }); out.innerHTML = mdLite(r.summary) + `<p class="muted" style="font-size:12px">По ${r.count} ${plural(r.count, 'сообщению', 'сообщениям', 'сообщениям')}</p>`; }
+      catch (e) { out.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
+      root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = false);
+    });
+  }, 'wide');
+}
 
 // ---------- Календарь ----------
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
