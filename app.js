@@ -816,6 +816,7 @@ function chatTitle(chat) {
   }
   if (chat.startsWith('g:')) return state.groups.get(Number(chat.slice(2)))?.name || '';
   const [, a, b] = chat.split(':');
+  if (a !== state.me.id && b !== state.me.id) return `${userName(a)} ↔ ${userName(b)}`; // чужая переписка (просмотр администратором)
   const other = state.users.get(a === state.me.id ? b : a);
   return other ? other.name : '';
 }
@@ -827,6 +828,9 @@ function chatMembers(chat) {
   if (chat.startsWith('g:')) return state.groups.get(Number(chat.slice(2)))?.members || [];
   return chat.split(':').slice(1);
 }
+// администратор просматривает чужой групповой чат (без права писать)
+const isObserver = (chat) => (chat?.startsWith('g:') && !(state.groups.get(Number(chat.slice(2)))?.members || []).includes(state.me.id))
+  || (chat?.startsWith('d:') && !chat.split(':').slice(1).includes(state.me.id));
 const callCount = (chat) => [...state.inCall.values()].filter((c) => c === chat).length;
 
 function renderSidebar() {
@@ -841,7 +845,7 @@ function renderSidebar() {
   $('#channelList').innerHTML = state.channels.map((c) => item(`c:${c.id}`, c.name, '<span class="ico">#</span>')).join('');
   const groups = [...state.groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   $('#groupList').innerHTML = groups.length
-    ? groups.map((g) => item(`g:${g.id}`, g.name, '<span class="ico">👥</span>')).join('')
+    ? groups.map((g) => item(`g:${g.id}`, g.name, `<span class="ico" title="${g.members.includes(state.me.id) ? '' : 'Вы не участник — просмотр как администратор'}">${g.members.includes(state.me.id) ? '👥' : '👁'}</span>`)).join('')
     : '<div class="side-hint">Нажмите +, чтобы создать</div>';
   const users = activeUsers().sort((a, b) => (state.online.has(b.id) - state.online.has(a.id)) || a.name.localeCompare(b.name, 'ru'));
   $('#userList').innerHTML = users.map((u) =>
@@ -1026,7 +1030,7 @@ function openGroupSettings(groupId) {
       <div class="field"><span>Добавить участников</span>${peoplePicker(g.members)}</div>
       <div class="modal-err" id="mErr"></div>
     </div>
-    <div class="modal-foot"><button class="danger" id="mLeave">Покинуть чат</button>${canDeleteChat(`g:${g.id}`) ? '<button class="danger" id="mDel">Удалить чат</button>' : ''}<span class="spacer"></span>
+    <div class="modal-foot">${g.members.includes(state.me.id) ? '<button class="danger" id="mLeave">Покинуть чат</button>' : ''}${canDeleteChat(`g:${g.id}`) ? '<button class="danger" id="mDel">Удалить чат</button>' : ''}<span class="spacer"></span>
       <button class="secondary" data-close>Закрыть</button><button class="primary" id="mAdd">Добавить</button></div>`,
     (root) => {
       const err = (e) => root.querySelector('#mErr').textContent = humanError(e);
@@ -1043,7 +1047,8 @@ function openGroupSettings(groupId) {
       };
       const del = root.querySelector('#mDel');
       if (del) del.onclick = () => deleteChat(`g:${g.id}`);
-      root.querySelector('#mLeave').onclick = async () => {
+      const leave = root.querySelector('#mLeave');
+      if (leave) leave.onclick = async () => {
         if (!confirm(`Покинуть чат «${g.name}»? Историю переписки вы больше не увидите.`)) return;
         try {
           await rpc('sl_leave_group', { p_group: g.id });
@@ -1092,11 +1097,14 @@ function renderChatHeader() {
   }
   const self = chat.startsWith('d:') && chat.split(':')[1] === chat.split(':')[2];
   if (isReadonly(chat)) $('#chatTitle').innerHTML += '<span class="sub">🔒 только чтение</span>';
-  const ro = isReadonly(chat) && !state.me.isAdmin;
+  const obs = isObserver(chat);
+  if (obs) actions = '';
+  const ro = (isReadonly(chat) && !state.me.isAdmin) || obs;
+  $('#readonlyNote').textContent = obs ? (chat.startsWith('d:') ? '👁 Личная переписка сотрудников — просмотр как администратор' : '👁 Вы не участник этого чата — просмотр как администратор') : '🔒 В этом канале пишут только администраторы';
   $('#readonlyNote').classList.toggle('hidden', !ro);
   document.querySelector('#chatView .input-row').classList.toggle('hidden', ro);
   actions += `<button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
-  $('#chatActions').innerHTML = (self ? '' : callBtn) + ' ' + actions;
+  $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + ' ' + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
   const chb = $('#chanBtn');
@@ -1131,6 +1139,7 @@ function onMessage(m) {
   const visible = state.view === 'chat' && m.chat === state.current;
   if (visible) { appendMessage(m); clearTyping(m.userId); if (!document.hidden) markRead(); }
   if (m.userId !== state.me.id && !m.system) playPing(visible && !document.hidden); // в открытом чате — тише
+  if (isObserver(m.chat)) { if (visible) appendMessage(m); return; } // чужой чат: без счётчиков и звуков
   if (m.userId !== state.me.id && !m.system && (!visible || document.hidden)) {
     if (!visible) state.unread.set(m.chat, (state.unread.get(m.chat) || 0) + 1);
     notify(m);
@@ -1278,7 +1287,8 @@ function reactsHtml(m) {
 // ✓ — отправлено, ✓✓ — прочитано (в группах — сколько человек прочитали)
 function ticksHtml(m) {
   const reads = state.reads.get(m.chat);
-  const readers = reads ? [...reads.entries()].filter(([uid, last]) => uid !== state.me.id && last >= m.id).map(([uid]) => uid) : [];
+  const parts = m.chat.startsWith('d:') ? m.chat.split(':').slice(1) : null;
+  const readers = reads ? [...reads.entries()].filter(([uid, last]) => uid !== state.me.id && last >= m.id && (!parts || parts.includes(uid))).map(([uid]) => uid) : [];
   if (m.chat.startsWith('d:')) return readers.length ? ' <span class="tick read" title="Прочитано">✓✓</span>' : ' <span class="tick">✓</span>';
   return readers.length ? ` <span class="tick read" data-readers="${m.id}" title="Кто прочитал">✓✓ ${readers.length}</span>` : ' <span class="tick">✓</span>';
 }
@@ -1598,7 +1608,7 @@ function markRead() {
   readTimer = setTimeout(() => {
     const chat = state.current, list = state.messages.get(chat) || [];
     const last = list[list.length - 1];
-    if (!last || document.hidden || state.view !== 'chat') return;
+    if (!last || document.hidden || state.view !== 'chat' || isObserver(chat)) return;
     const mine = state.reads.get(chat)?.get(state.me.id) || 0;
     if (last.id <= mine) return;
     if (!state.reads.has(chat)) state.reads.set(chat, new Map());
@@ -2595,6 +2605,24 @@ async function renderAdmin() {
   renderAnnAdmin();
   renderChannelsAdmin();
   renderGroupsAdmin();
+  renderDmsAdmin();
+}
+// Все личные переписки (сведения) — администратор может открыть для чтения
+async function renderDmsAdmin() {
+  const card = $('#dmsCard');
+  if (!card) return;
+  let rows = [];
+  try { rows = check(await sb.rpc('sl_admin_dms')); } catch (e) { card.innerHTML = `<div class="admin-card-title">Личные переписки</div><div class="modal-err">${esc(humanError(e))}</div>`; return; }
+  const when = (t) => new Date(t).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  card.innerHTML = `<div class="admin-card-title">Личные переписки <span class="n">${rows.length}</span></div>
+    <div class="muted" style="margin-bottom:6px">Открываются только для чтения. Ваш просмотр не отмечается как «прочитано».</div>
+    <label class="field"><input id="dmQ" placeholder="Поиск по имени сотрудника"></label>
+    <div id="dmList">${rows.map((d) => `<div class="u-row" data-q="${esc((userName(d.a) + ' ' + userName(d.b)).toLowerCase())}"><div class="u-main">
+        <div class="u-name">${esc(userName(d.a))} ↔ ${esc(userName(d.b))}</div>
+        <div class="u-meta">${d.messages} ${plural(Number(d.messages), 'сообщение', 'сообщения', 'сообщений')} · последнее: ${when(d.last_at)}</div></div>
+      <div class="u-actions"><button data-dopen="${esc(d.chat)}">👁 Читать</button></div></div>`).join('') || '<div class="muted">Личных переписок пока нет</div>'}</div>`;
+  card.querySelector('#dmQ').oninput = (e) => { const q = e.target.value.toLowerCase().trim(); card.querySelectorAll('#dmList .u-row').forEach((r) => r.classList.toggle('hidden', !!q && !r.dataset.q.includes(q))); };
+  card.querySelectorAll('[data-dopen]').forEach((b) => b.onclick = () => openChat(b.dataset.dopen));
 }
 // Все групповые чаты компании (только сведения, без переписки) — администратор может удалить любой
 async function renderGroupsAdmin() {
@@ -2608,8 +2636,12 @@ async function renderGroupsAdmin() {
         <div class="u-name">👥 ${esc(g.name)} ${g.members.includes(state.me.id) ? '<span class="tag shared">вы участник</span>' : ''}</div>
         <div class="u-meta">создал(а): <b>${esc(userName(g.created_by))}</b> · ${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')} · ${g.messages} ${plural(Number(g.messages), 'сообщение', 'сообщения', 'сообщений')} · последнее: ${when(g.last_at)}</div>
         <div class="u-meta">${g.members.map(userName).map(esc).join(', ')}</div></div>
-      <div class="u-actions">${g.members.includes(state.me.id) ? `<button data-gopen="${g.id}">Открыть</button>` : ''}<button class="warn" data-gdel="${g.id}" data-name="${esc(g.name)}">Удалить</button></div></div>`).join('') || '<div class="muted">Групповых чатов пока нет</div>'}`;
-  card.querySelectorAll('[data-gopen]').forEach((b) => b.onclick = () => openChat('g:' + b.dataset.gopen));
+      <div class="u-actions"><button data-gopen="${g.id}">${g.members.includes(state.me.id) ? 'Открыть' : '👁 Читать'}</button><button class="warn" data-gdel="${g.id}" data-name="${esc(g.name)}">Удалить</button></div></div>`).join('') || '<div class="muted">Групповых чатов пока нет</div>'}`;
+  card.querySelectorAll('[data-gopen]').forEach((b) => b.onclick = () => {
+    const g = rows.find((x) => String(x.id) === b.dataset.gopen);
+    if (g && !state.groups.has(g.id)) state.groups.set(g.id, { id: g.id, name: g.name, createdBy: g.created_by, members: g.members });
+    renderSidebar(); openChat('g:' + b.dataset.gopen);
+  });
   card.querySelectorAll('[data-gdel]').forEach((b) => b.onclick = async () => {
     const chat = 'g:' + b.dataset.gdel;
     if (!confirm(`Удалить чат «${b.dataset.name}» вместе со всей перепиской?\n\nЭто нельзя отменить — сообщения и файлы пропадут у всех участников.`)) return;

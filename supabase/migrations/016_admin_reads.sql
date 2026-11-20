@@ -1,0 +1,1 @@
+-- Администратор читает все групповые чаты и личные переписки (только чтение; без отметок «прочитано» и без входа в звонки): sl_can_access, sl_messages_insert, sl_mark_read, sl_call_allowed, sl_admin_dms. Применено миграциями shtark_link_admin_reads_groups, shtark_link_admin_reads_dms, shtark_link_call_allowed_members_only.
