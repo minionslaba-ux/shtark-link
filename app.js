@@ -416,8 +416,8 @@ ${body}</html>`;
   } catch (e) { toast('Не удалось выгрузить: ' + humanError(e)); }
 }
 $('#meName').onclick = openMyProfile;
-$('#navPeople').onclick = () => { $('#sidebar').classList.remove('open'); openDirectory(); };
-$('#navCalls').onclick = () => { $('#sidebar').classList.remove('open'); openCallHistory(); };
+$('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
+$('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
 
 // ---------- Старт ----------
 async function start() {
@@ -726,7 +726,22 @@ function renderSidebar() {
   updateTitle();
 }
 
-document.querySelectorAll('.menuBtn').forEach((b) => b.onclick = () => $('#sidebar').classList.toggle('open'));
+// Меню на телефоне: открыть ☰; закрыть — ✕, нажатием на затемнение справа или смахиванием влево
+function setSidebar(open) { $('#sidebar').classList.toggle('open', open); $('#sideShade').classList.toggle('hidden', !open); }
+document.querySelectorAll('.menuBtn').forEach((b) => b.onclick = () => setSidebar(!$('#sidebar').classList.contains('open')));
+$('#sideShade').onclick = () => setSidebar(false);
+$('#sideClose').onclick = () => setSidebar(false);
+{
+  let x0 = null, y0 = 0;
+  $('#sidebar').addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  $('#sidebar').addEventListener('touchend', (e) => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0, dy = Math.abs(e.changedTouches[0].clientY - y0);
+    if (dx < -60 && dy < 50) setSidebar(false);
+    x0 = null;
+  }, { passive: true });
+}
+
 $('#navCalendar').onclick = () => openCalendar();
 $('#navTasks').onclick = () => openTasks();
 $('#navAdmin').onclick = () => openAdmin();
@@ -825,7 +840,7 @@ function showView(view) {
   $('#calView').classList.toggle('hidden', view !== 'calendar');
   $('#taskView').classList.toggle('hidden', view !== 'tasks');
   $('#adminView').classList.toggle('hidden', view !== 'admin');
-  $('#sidebar').classList.remove('open');
+  setSidebar(false);
 }
 
 function renderChatHeader() {
@@ -2728,7 +2743,7 @@ async function joinCall(chat, opts = {}) {
       if (!relay) rejoinViaRelay(chat);
       else toast('Не удаётся установить голосовое соединение. Похоже, сеть блокирует звонки: попробуйте другую сеть (мобильный интернет или другой Wi‑Fi) или отключите/включите VPN.');
     }, 10000);
-    $('#callTitle').textContent = chatTitle(chat);
+    $('#callTitle').textContent = callTitle(chat);
     $('#callPanel').classList.remove('hidden');
     room.startAudio().catch(() => {});
     $('#callSound').classList.toggle('hidden', room.canPlaybackAudio);
@@ -2874,6 +2889,41 @@ $('#callPanel').addEventListener('pointerdown', () => {
   r.startAudio?.().catch(() => {});
   document.querySelectorAll('#callAudio audio').forEach((a) => a.paused && a.play().catch(() => {}));
 });
+// Добавить собеседника в идущий звонок
+const isMyChat = (chat) => chat.startsWith('c:') || (chat.startsWith('g:') && chatMembers(chat).includes(state.me.id)) || (chat.startsWith('d:') && chat.includes(state.me.id));
+function callTitle(chat) {
+  if (isMyChat(chat)) return chatTitle(chat);
+  if (chat.startsWith('d:')) return chat.split(':').slice(1).map(userName).join(' и ');
+  return 'групповой звонок';
+}
+function openCallInvite() {
+  const room = call.room, chat = call.chat;
+  if (!room) return;
+  const inCall = new Set([room.localParticipant.identity, ...room.remoteParticipants.keys()]);
+  const list = activeUsers().filter((u) => !inCall.has(u.id)).sort((a, b) => (state.online.has(b.id) - state.online.has(a.id)) || a.name.localeCompare(b.name, 'ru'));
+  openModal(`<h3>➕ Добавить в разговор</h3><div class="modal-body">
+    ${list.length ? `<label class="field"><input id="ciQ" placeholder="Поиск сотрудника"></label>` + list.map((u) => `<div class="person" data-uid="${u.id}" data-name="${esc(u.name.toLowerCase())}">
+      <span class="sava">${avatar(u, 'sm')}<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></span><span style="flex:1;min-width:0">${esc(u.name)}<div class="u-meta">${esc(statusOf(u) || u.position || '')}</div></span>
+      <button class="hbtn primary-sm">Позвать</button></div>`).join('') : '<p class="muted">Все сотрудники уже в разговоре</p>'}
+    </div><div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Готово</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const q = root.querySelector('#ciQ');
+    if (q) q.oninput = () => root.querySelectorAll('.person').forEach((el) => el.classList.toggle('hidden', !el.dataset.name.includes(q.value.toLowerCase().trim())));
+    root.querySelectorAll('.person[data-uid]').forEach((el) => el.querySelector('button').onclick = async (e) => {
+      const b = e.target, uid = el.dataset.uid;
+      b.disabled = true; b.textContent = 'Зовём…';
+      try {
+        await rpc('sl_call_invite', { p_chat: chat, p_user: uid });
+        state.rt?.send({ type: 'broadcast', event: 'call', payload: { type: 'ring', chat, from: state.me.id, to: uid } });
+        fn('sl-push', { action: 'invite', chat, user: uid }).catch(() => {});
+        b.textContent = '✓ Позвали';
+        toast(`📞 ${userName(uid)}: приглашение отправлено`);
+      } catch (er) { b.disabled = false; b.textContent = 'Позвать'; toast(humanError(er)); }
+    });
+  });
+}
+$('#callAdd').onclick = openCallInvite;
 $('#callScreen').onclick = async () => {
   if (!call.room) return;
   try { call.screen = !call.screen; await call.room.localParticipant.setScreenShareEnabled(call.screen); }
@@ -2966,24 +3016,30 @@ function onCallSignal(p) {
   if (p.type === 'ring') {
     callStates.set(p.from, { chat: p.chat, until: Date.now() + 40000 });
     rebuildInCall();
+    if (p.to) { // приглашение в идущий звонок — только адресату
+      if (p.to === state.me.id && call.chat !== p.chat) showIncoming(p.chat, p.from, true);
+      return;
+    }
     if (call.chat === p.chat || !chatMembers(p.chat).includes(state.me.id)) return;
     if (p.chat.startsWith('c:')) return; // в каналах не звоним всем — только значок «идёт созвон»
     showIncoming(p.chat, p.from);
   } else if (p.type === 'cancel' && incomingChat === p.chat) {
     hideIncoming();
     toast(`Пропущенный звонок от ${userName(p.from)}`, () => openChat(p.chat));
-  } else if (p.type === 'decline' && call.chat === p.chat && p.chat.startsWith('d:')) {
+  } else if (p.type === 'decline' && call.chat === p.chat && (p.invite || p.chat.startsWith('d:'))) {
+    if (p.invite || call.room?.remoteParticipants.size) { toast(`${userName(p.from)} не может присоединиться`); return; }
     toast(`${userName(p.from)} отклонил(а) звонок`);
     playBusy();
     leaveCall();
   }
 }
-function showIncoming(chat, from) {
-  incomingChat = chat;
+let incomingInvite = false;
+function showIncoming(chat, from, invite = false) {
+  incomingChat = chat; incomingInvite = invite;
   const u = state.users.get(from) || { id: from, name: 'Сотрудник' };
   $('#incomingAva').innerHTML = avatar(u);
   $('#incomingName').textContent = u.name;
-  $('#incomingSub').textContent = chat.startsWith('d:') ? 'Входящий звонок' : `Звонок в «${chatTitle(chat)}»`;
+  $('#incomingSub').textContent = invite ? `Приглашает в разговор: ${callTitle(chat)}` : chat.startsWith('d:') ? 'Входящий звонок' : `Звонок в «${chatTitle(chat)}»`;
   $('#incoming').classList.remove('hidden');
   startRingtone();
   localNotify('📞 Входящий звонок', `${u.name}${chat.startsWith('d:') ? ' звонит вам' : ' — ' + chatTitle(chat)}`, 'call-' + chat, `#chat=${chat}`, () => openChat(chat));
@@ -2998,11 +3054,11 @@ function hideIncoming() {
   $('#incoming').classList.add('hidden');
   stopRingtone();
 }
-$('#incomingAccept').onclick = () => { const c = incomingChat; hideIncoming(); openChat(c); joinCall(c); };
+$('#incomingAccept').onclick = () => { const c = incomingChat; hideIncoming(); if (isMyChat(c)) openChat(c); joinCall(c); };
 $('#incomingDecline').onclick = () => {
   const c = incomingChat;
   hideIncoming();
-  state.rt.send({ type: 'broadcast', event: 'call', payload: { type: 'decline', chat: c, from: state.me.id } });
+  state.rt.send({ type: 'broadcast', event: 'call', payload: { type: 'decline', chat: c, from: state.me.id, invite: incomingInvite } });
 };
 function startRingtone() {
   try {
@@ -3043,8 +3099,13 @@ function localNotify(title, body, tag, url, onClick) {
 function openDeepLink(hash) {
   const h = String(hash || '').replace(/^.*#/, '');
   if (!h) return false;
-  const [key, value] = h.split('=');
+  const [key, value] = h.split('&')[0].split('=');
   if (key === 'chat' && value) { openChat(decodeURIComponent(value)); return true; }
+  if (key === 'call' && value) { // приглашение в звонок: подтверждаем нажатием (без него телефон не даст микрофон)
+    const from = new URLSearchParams(h.split('&').slice(1).join('&')).get('from');
+    showIncoming(decodeURIComponent(value), from, true);
+    return true;
+  }
   if (key === 'task' && value) {
     openTasks();
     (state.tasksLoaded || Promise.resolve()).then(() => openTaskView(Number(value)));

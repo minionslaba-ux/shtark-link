@@ -1,0 +1,2 @@
+-- Приглашение в идущий звонок: sl_call_invites, sl_call_allowed (участник чата или приглашён за последние 12 ч),
+-- sl_call_invite; sl_call_event и sl-call-token используют sl_call_allowed. Применено миграцией shtark_link_call_invites.

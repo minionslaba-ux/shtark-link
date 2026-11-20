@@ -1,5 +1,5 @@
 // Shtark Link — пропуск в звонок (токен LiveKit).
-// Проверяет, что сотрудник имеет доступ к чату, и выдаёт подписанный токен комнаты.
+// Проверяет, что сотрудник имеет доступ к чату (или приглашён в звонок), и выдаёт подписанный токен комнаты.
 // Нужны секреты функции: LIVEKIT_URL (wss://…livekit.cloud), LIVEKIT_API_KEY, LIVEKIT_API_SECRET.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -42,7 +42,8 @@ Deno.serve(async (req) => {
     if (!u?.user) return json({ error: 'Не авторизован' }, 401);
 
     const { chat } = await req.json().catch(() => ({}));
-    const { data: ok } = await asUser.rpc('sl_can_access', { p_chat: String(chat || '') });
+    // участник чата или приглашённый в звонок
+    const { data: ok } = await asUser.rpc('sl_call_allowed', { p_chat: String(chat || '') });
     if (!ok) return json({ error: 'Нет доступа к этому чату' }, 403);
     const { data: me } = await asUser.from('sl_profiles').select('name').eq('id', u.user.id).single();
 

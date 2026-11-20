@@ -2,7 +2,8 @@
 // 1) Вызовы из базы (триггеры sl_hook, заголовок x-sl-hook): новое сообщение, задача, комментарий.
 // 2) Вызовы из приложения (Authorization: Bearer <токен сотрудника>):
 //    { action: 'vapid' } — открытый ключ; 'subscribe' { sub }; 'unsubscribe' { endpoint };
-//    'test' — тестовое уведомление себе; 'ring' { chat } — «входящий звонок» тем, у кого приложение закрыто.
+//    'test' — тестовое уведомление себе; 'ring' { chat } — «входящий звонок» тем, у кого приложение закрыто;
+//    'invite' { chat, user } — приглашение в уже идущий звонок.
 // Тем, кто сейчас в приложении (last_active < 30 с), push не отправляется — вкладка покажет уведомление сама.
 // Кроме входящих звонков: о них сообщаем всегда.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -218,6 +219,15 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       case 'test':
         return json({ sent: await send([me.id], { title: 'Shtark Link', body: 'Уведомления работают 🎉', url: '/', tag: 'test' }, { force: true }) });
+      case 'invite': { // пригласили в идущий звонок
+        const chat = String(body.chat || ''), to = String(body.user || '');
+        const { data: inv } = await db.from('sl_call_invites').select('created_at').eq('chat', chat).eq('user_id', to).eq('invited_by', me.id).maybeSingle();
+        if (!inv || Date.parse(inv.created_at) < Date.now() - 120_000) return json({ error: 'Нет приглашения' }, 403);
+        return json({ sent: await send([to], {
+          title: '📞 Приглашение в звонок', body: `${me.name} приглашает вас в разговор`,
+          url: `/#call=${encodeURIComponent(chat)}&from=${me.id}`, tag: `call-${chat}`, ttl: 45, urgency: 'high', requireInteraction: true,
+        }, { force: true }) });
+      }
       case 'ring': {
         const chat = String(body.chat || '');
         const list = await members(chat);
