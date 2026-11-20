@@ -1005,7 +1005,7 @@ function messageHtml(m, prev) {
         ${m.replyTo ? quoteHtml(m.replyTo) : ''}
         ${m.text ? `<div class="text">${richText(m)}</div>` : ''}
         ${file}
-        <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont ? fmtTime(m.createdAt) : ''}${mine ? ticksHtml(m) : ''}</span></div>
+        <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont || mine ? fmtTime(m.createdAt) : ''}${mine && m.pinnedAt ? ' 📌' : ''}${mine ? ticksHtml(m) : ''}</span></div>
         ${acts}
       </div></div>`;
 }
@@ -2773,7 +2773,7 @@ async function joinCall(chat, opts = {}) {
       if (!chat.startsWith('c:')) {
         fn('sl-push', { action: 'ring', chat }).catch(() => {});
         startRingback(); // гудки, пока не ответят
-        // телефон собеседника «звонит»: повторяем уведомление каждые 4 с, пока не ответят (до 45 с)
+        // телефон собеседника «звонит»: повторяем уведомление каждые 2 с, пока не ответят (до 45 с)
         if (chat.startsWith('d:')) repeatPush(() => call.chat === chat && call.room === room && room.remoteParticipants.size === 0,
           (seq) => fn('sl-push', { action: 'ring', chat, seq }));
       }
@@ -2791,8 +2791,8 @@ async function joinCall(chat, opts = {}) {
   } finally { call.joining = false; }
 }
 
-// Повтор push-уведомления о звонке, пока условие верно (не больше 10 раз)
-function repeatPush(alive, sendFn, every = 4000, max = 10) {
+// Повтор push-уведомления о звонке каждые 2 с, пока условие верно (до ~45 с)
+function repeatPush(alive, sendFn, every = 2000, max = 22) {
   let seq = 0;
   const t = setInterval(() => {
     if (!alive() || ++seq > max) return clearInterval(t);
