@@ -1590,6 +1590,47 @@ async function publishMic(room, stream) {
   await room.localParticipant.publishTrack(stream.getAudioTracks()[0], { source: LK.Track.Source.Microphone });
 }
 
+// ---------- Диагностика звонка (технические показатели, без звука) ----------
+const deviceId = (() => { try { let d = localStorage.getItem('sl-device'); if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem('sl-device', d); } return d; } catch { return 'nodev'; } })();
+async function statsOf(track) {
+  try { return await track?.getRTCStatsReport?.(); } catch { return null; }
+}
+function pairInfo(report) {
+  if (!report) return null;
+  let pair = null;
+  report.forEach((s) => { if (s.type === 'candidate-pair' && (s.selected || s.nominated) && s.state === 'succeeded') pair = s; });
+  if (!pair) report.forEach((s) => { if (s.type === 'transport' && s.selectedCandidatePairId) pair = report.get(s.selectedCandidatePairId); });
+  if (!pair) return null;
+  const lc = report.get(pair.localCandidateId), rc = report.get(pair.remoteCandidateId);
+  return { local: lc?.candidateType, proto: lc?.protocol, relay: lc?.relayProtocol, remote: rc?.candidateType, rtt: pair.currentRoundTripTime };
+}
+async function collectCallDiag() {
+  const room = call.room, chat = call.chat;
+  if (!room) return;
+  const LK = window.LivekitClient, lp = room.localParticipant;
+  const micPub = lp.getTrackPublication(LK.Track.Source.Microphone);
+  const micStats = await statsOf(micPub?.track);
+  let bytesSent = 0;
+  micStats?.forEach((s) => { if (s.type === 'outbound-rtp') bytesSent += s.bytesSent || 0; });
+  const remotes = [];
+  for (const p of room.remoteParticipants.values()) {
+    const pub = p.getTrackPublication(LK.Track.Source.Microphone);
+    const st = await statsOf(pub?.track);
+    let bytesRecv = 0, packetsLost = 0;
+    st?.forEach((s) => { if (s.type === 'inbound-rtp') { bytesRecv += s.bytesReceived || 0; packetsLost += s.packetsLost || 0; } });
+    remotes.push({ who: userName(p.identity), audioPub: !!pub, subscribed: !!pub?.isSubscribed, muted: !!pub?.isMuted,
+      level: Math.round((p.audioLevel || 0) * 100) / 100, bytesRecv, packetsLost, pair: pairInfo(st) });
+  }
+  const audioEls = [...document.querySelectorAll('#callAudio audio')].map((a) => ({ paused: a.paused, muted: a.muted, vol: a.volume }));
+  const data = {
+    ua: navigator.userAgent.slice(0, 160), standalone: isStandalone, state: room.state, canPlayAudio: room.canPlaybackAudio,
+    mic: { want: call.mic, published: !!micPub, muted: !!micPub?.isMuted, level: Math.round((lp.audioLevel || 0) * 100) / 100,
+      bytesSent, error: call.micError || null, pair: pairInfo(micStats) },
+    remotes, audioEls, secs: Math.round((Date.now() - call.started) / 1000),
+  };
+  sb.from('sl_call_diag').upsert({ user_id: state.me.id, device: deviceId, chat, data, updated_at: new Date().toISOString() }).then(() => {}, () => {});
+}
+
 async function joinCall(chat) {
   if (call.chat === chat || call.joining) return; // защита от двойного входа
   // Микрофон запрашиваем сразу, в момент нажатия: iPhone не разрешает запрос «потом»
@@ -1608,7 +1649,7 @@ async function joinCall(chat) {
     const [tok] = await Promise.all([fn('sl-call-token', { chat }), loadLiveKit()]);
     const LK = window.LivekitClient;
     const room = new LK.Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true } });
-    call.chat = chat; call.room = room; call.started = Date.now(); call.mic = true; call.cam = false; call.screen = false;
+    call.chat = chat; call.room = room; call.started = Date.now(); call.mic = true; call.micError = null; call.cam = false; call.screen = false;
     room
       .on(LK.RoomEvent.TrackSubscribed, (track) => { if (track.kind === 'audio') $('#callAudio').appendChild(track.attach()); renderCall(); })
       .on(LK.RoomEvent.TrackUnsubscribed, (track) => { track.detach().forEach((el) => el.remove()); renderCall(); })
@@ -1632,11 +1673,12 @@ async function joinCall(chat) {
       try { await publishMic(room, stream); call.mic = true; }
       catch (e) {
         console.warn('publish mic', e);
-        call.mic = false;
+        call.mic = false; call.micError = 'publish: ' + (e?.message || e);
         toast('Не удалось передать звук на сервер звонков. Проверьте интернет и нажмите 🎤 ещё раз.');
       }
       renderCall();
-    }, (e) => { call.mic = false; renderCall(); showMediaError(e, 'микрофон'); });
+    }, (e) => { call.mic = false; call.micError = (e?.name || '') + ': ' + (e?.message || ''); renderCall(); showMediaError(e, 'микрофон'); });
+    call.diagTimer = setInterval(collectCallDiag, 4000);
     call.timer = setInterval(() => {
       const s = Math.floor((Date.now() - call.started) / 1000);
       $('#callTimer').textContent = `${pad(Math.floor(s / 60))}:${pad(s % 60)}` + (room.remoteParticipants.size ? '' : ' · ожидание…');
@@ -1670,7 +1712,8 @@ async function leaveCall() {
   await room.disconnect().catch(() => {});
 }
 function cleanupCall() {
-  clearInterval(call.timer); clearTimeout(call.ringTimeout);
+  clearInterval(call.timer); clearInterval(call.diagTimer); clearTimeout(call.ringTimeout);
+  if (call.room) collectCallDiag();
   call.chat = null; call.room = null;
   $('#callPanel').classList.add('hidden');
   $('#callPanel').classList.remove('big');
