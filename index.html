@@ -841,6 +841,50 @@
   .circle-rec .ring { fill: none; stroke: #ef4444; stroke-width: 3; stroke-dasharray: 301.6; stroke-dashoffset: 301.6; transition: stroke-dashoffset .25s linear; }
   .circle-ctl { display: flex; align-items: center; gap: 12px; color: #fff; font-weight: 600; }
   @media (max-width: 720px) { .circle-wrap, video.circle { width: 170px; height: 170px; } }
+
+  /* ===================== v3: работа ===================== */
+  #taskBoardBtn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .task-list.board { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; }
+  .b-col { background: var(--bg); border-radius: 16px; padding: 10px; min-height: 200px; transition: background .15s, box-shadow .15s; }
+  .b-col.over { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+  .b-head { font-weight: 700; font-size: 13px; padding: 2px 4px 10px; display: flex; gap: 6px; align-items: center; }
+  .b-head .n { background: var(--panel); border-radius: 10px; padding: 0 8px; font-size: 12px; color: var(--muted); }
+  .b-items { display: flex; flex-direction: column; gap: 8px; }
+  .b-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px; cursor: grab; box-shadow: var(--shadow-sm); transition: transform .15s, box-shadow .15s; }
+  .b-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .b-card.dragging { opacity: .5; }
+  .b-card.overdue { border-left: 3px solid var(--danger); }
+  .b-card .t-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .b-card .t-meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .b-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 16px; border: 2px dashed var(--border); border-radius: 12px; }
+  @media (max-width: 720px) { .task-list.board { grid-template-columns: repeat(3, 78vw); } }
+  .checklist { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .cl-item { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; }
+  .cl-item:hover { background: var(--bg); }
+  .cl-item span { flex: 1; }
+  .cl-item.done span { text-decoration: line-through; color: var(--muted); }
+  .cl-item button { border: 0; background: none; color: var(--muted); visibility: hidden; }
+  .cl-item:hover button { visibility: visible; }
+  .cl-add input { width: 100%; border: 1px dashed var(--border); border-radius: 8px; padding: 7px 10px; background: transparent; color: var(--text); }
+  .u-row.appr { cursor: pointer; border-radius: 10px; }
+  .u-row.appr:hover { background: var(--bg); }
+  .tag.appr-pending { background: #fef3c7; color: #92400e; }
+  .tag.appr-approved { background: #dcfce7; color: #166534; }
+  .tag.appr-rejected { background: #fee2e2; color: #991b1b; }
+  .tag.appr-cancelled { background: #e5e7eb; color: #374151; }
+  .appr-steps { display: flex; flex-direction: column; gap: 6px; }
+  .appr-step { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+  .appr-step .dotn { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; background: var(--bg); color: var(--muted); flex-shrink: 0; }
+  .appr-step.approved .dotn { background: #22c55e; color: #fff; }
+  .appr-step.rejected .dotn { background: #ef4444; color: #fff; }
+  .appr-step.now .dotn { background: var(--accent); color: #fff; box-shadow: 0 0 0 4px var(--accent-soft); }
+  .appr-step .u-meta { width: 100%; padding-left: 32px; }
+  .kb-body { line-height: 1.6; }
+  .kb-body h2, .kb-body h3, .kb-body h4 { margin: 14px 0 6px; }
+  .kb-body p { margin: 0 0 8px; }
+  .kb-body ul { margin: 0 0 8px; padding-left: 22px; }
+  .chat-item.working .ico { color: #22c55e; opacity: 1; }
+  table.rep.work th, table.rep.work td { padding: 5px 6px; font-size: 13px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -874,6 +918,9 @@
       <div class="chat-item nav" id="navTasks"><span class="ico">📋</span><span class="label">Задачи</span><span id="tasksBadge"></span></div>
       <div class="chat-item nav" id="navPeople"><span class="ico">👥</span><span class="label">Сотрудники</span></div>
       <div class="chat-item nav" id="navCalls"><span class="ico">📞</span><span class="label">Звонки</span></div>
+      <div class="chat-item nav" id="navWork"><span class="ico">▶</span><span class="label">Начать рабочий день</span></div>
+      <div class="chat-item nav" id="navAppr"><span class="ico">✅</span><span class="label">Согласования</span><span id="apprBadge"></span></div>
+      <div class="chat-item nav" id="navKb"><span class="ico">📚</span><span class="label">База знаний</span></div>
       <div class="chat-item nav" id="navSaved"><span class="ico">★</span><span class="label">Избранное</span></div>
       <div class="chat-item nav" id="navLook"><span class="ico">🎨</span><span class="label">Оформление</span></div>
       <div class="chat-item nav hidden" id="navAdmin"><span class="ico">⚙️</span><span class="label">Администрирование</span></div>
@@ -962,6 +1009,7 @@
           <button data-f="byme">Я поручил</button>
           <button data-f="all">Все</button>
         </div>
+        <button class="hbtn" id="taskBoardBtn" title="Список или доска">▦ <span class="lbl">Доска</span></button>
         <button class="hbtn" id="taskReport" title="Отчёт по задачам">📊 <span class="lbl">Отчёт</span></button>
         <button class="hbtn primary-sm" id="taskAdd">+ Задача</button>
       </div>
@@ -985,6 +1033,7 @@
         <div class="admin-card" id="chanCard"></div>
         <div class="admin-card" id="groupsCard"></div>
         <div class="admin-card" id="dmsCard"></div>
+        <div class="admin-card" id="workCard"></div>
         <div class="admin-card">
           <div class="admin-card-title">Сотрудники <span class="n" id="adminCount"></span></div>
           <div id="adminUsers"></div>
@@ -1032,8 +1081,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611210600"></script>
-<script src="config.js?v=202611210600"></script>
-<script src="app.js?v=202611210600"></script>
+<script src="vendor/supabase.js?v=202611210640"></script>
+<script src="config.js?v=202611210640"></script>
+<script src="app.js?v=202611210640"></script>
 </body>
 </html>

@@ -1,0 +1,1 @@
+-- v3 работа: sl_approvals/sl_approval_events + sl_approval_create/decide/cancel; sl_tasks.checklist + sl_task_checklist; sl_kb; sl_workdays + sl_workday. Применено миграцией shtark_link_v3_work.

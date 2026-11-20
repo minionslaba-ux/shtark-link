@@ -548,6 +548,9 @@ $('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
 $('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
 $('#navLook').onclick = () => { setSidebar(false); openAppearance(); };
 $('#navSaved').onclick = () => { setSidebar(false); openSaved(); };
+$('#navAppr').onclick = () => { setSidebar(false); openApprovals(); };
+$('#navKb').onclick = () => { setSidebar(false); openKb(); };
+$('#navWork').onclick = () => toggleWorkday();
 
 // ---------- Старт ----------
 async function start() {
@@ -594,6 +597,8 @@ async function start() {
   loadEventsForMonth(state.calMonth).then(() => { renderSidebar(); checkReminders(); }).catch(() => {});
   loadUnread();
   loadAnnouncements();
+  loadApprovals();
+  loadWorkday();
   sb.from('sl_saved').select('message_id').then(({ data }) => { state.saved = new Set((data || []).map((r) => r.message_id)); });
   state.tasksLoaded = loadTasks().then(() => {
     const overdue = [...state.tasks.values()].filter((t) => t.assigneeId === state.me.id && isOverdue(t)).length;
@@ -651,6 +656,7 @@ function connectRealtime() {
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sl_messages' }, (p) => onMessageUpdated(msgFromRow(p.new)))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reactions' }, onReactionChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_poll_votes' }, onVoteChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_approvals' }, () => loadApprovals())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reads' }, onReadChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_profiles' }, onProfileChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_channels' }, () => reloadChannels())
@@ -2305,6 +2311,229 @@ async function startCircle() {
   ov.querySelector('#crSend').onclick = () => circ.mr.stop();
 }
 
+
+// ===================== v3: работа =====================
+// Согласования
+const APPR_KIND = { vacation: '🏖 Отпуск', payment: '💳 Оплата счёта', purchase: '🛒 Закупка', other: '📝 Другое' };
+const APPR_ST = { pending: 'На согласовании', approved: 'Согласовано', rejected: 'Отклонено', cancelled: 'Отозвано' };
+state.approvals = [];
+async function loadApprovals() {
+  try { state.approvals = check(await sb.from('sl_approvals').select('*').order('id', { ascending: false }).limit(300)); } catch {}
+  const mine = state.approvals.filter((a) => a.status === 'pending' && a.steps[a.step] === state.me.id).length;
+  $('#apprBadge').innerHTML = mine ? `<span class="badge">${mine}</span>` : '';
+}
+function apprRow(a) {
+  const who = a.steps[a.step];
+  return `<div class="u-row appr" data-aid="${a.id}"><div class="u-main">
+    <div class="u-name">${APPR_KIND[a.kind]} · ${esc(a.title)} <span class="tag appr-${a.status}">${APPR_ST[a.status]}</span></div>
+    <div class="u-meta">от ${esc(userName(a.created_by))} · ${new Date(a.created_at).toLocaleDateString('ru-RU')}${a.amount ? ' · ' + Number(a.amount).toLocaleString('ru-RU') + ' ₽' : ''}${a.date_from ? ` · ${a.date_from.split('-').reverse().join('.')}–${(a.date_to || a.date_from).split('-').reverse().join('.')}` : ''}
+      ${a.status === 'pending' ? ` · сейчас у: <b>${esc(userName(who))}</b>` : ''}</div></div></div>`;
+}
+async function openApprovals(tab) {
+  await loadApprovals();
+  const waiting = state.approvals.filter((a) => a.status === 'pending' && a.steps[a.step] === state.me.id);
+  tab = tab || (waiting.length ? 'wait' : 'mine');
+  const lists = { wait: waiting, mine: state.approvals.filter((a) => a.created_by === state.me.id), all: state.approvals };
+  openModal(`<h3>✅ Согласования</h3><div class="modal-body">
+    <div class="sp-tabs" style="margin-bottom:10px"><button data-at="wait" class="${tab === 'wait' ? 'on' : ''}">Ждут меня (${waiting.length})</button><button data-at="mine" class="${tab === 'mine' ? 'on' : ''}">Мои заявки</button>${state.me.isAdmin ? `<button data-at="all" class="${tab === 'all' ? 'on' : ''}">Все</button>` : ''}</div>
+    <div>${lists[tab].map(apprRow).join('') || '<p class="muted">Здесь пусто</p>'}</div></div>
+    <div class="modal-foot"><button class="primary" id="apNew">+ Новая заявка</button><span class="spacer"></span><button class="secondary" data-close>Закрыть</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelectorAll('[data-at]').forEach((b) => b.onclick = () => openApprovals(b.dataset.at));
+    root.querySelectorAll('[data-aid]').forEach((el) => el.onclick = () => openApproval(Number(el.dataset.aid)));
+    root.querySelector('#apNew').onclick = openApprovalForm;
+  }, 'wide');
+}
+function openApprovalForm() {
+  const users = activeUsers().filter((u) => u.id !== state.me.id).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const opts = users.map((u) => `<option value="${u.id}">${esc(u.name)}${u.position ? ' — ' + esc(u.position) : ''}</option>`).join('');
+  openModal(`<h3>Новая заявка</h3><div class="modal-body">
+    <label class="field"><span>Тип</span><select id="aKind">${Object.entries(APPR_KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+    <label class="field"><span>Кратко</span><input id="aTitle" maxlength="200" placeholder="например, Оплата счёта №125 от поставщика"></label>
+    <div class="row" id="aDates"><label class="field"><span>С</span><input id="aFrom" type="date"></label><label class="field"><span>По</span><input id="aTo" type="date"></label></div>
+    <label class="field" id="aAmountF"><span>Сумма, ₽</span><input id="aAmount" type="number" min="0" step="0.01"></label>
+    <label class="field"><span>Подробности</span><textarea id="aDetails" maxlength="8000"></textarea></label>
+    <label class="field"><span>Файл (счёт, договор)</span><input id="aFile" type="file"></label>
+    <div class="field"><span>Кто согласует — по порядку</span><div id="aSteps"></div><button class="secondary" type="button" id="aAddStep" style="padding:6px 10px">+ ещё согласующий</button></div>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="aOk">Отправить на согласование</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const steps = root.querySelector('#aSteps');
+    const addStep = () => { if (steps.children.length >= 6) return; const s = document.createElement('select'); s.innerHTML = `<option value="">— выберите —</option>${opts}`; s.style.marginBottom = '6px'; steps.appendChild(s); };
+    addStep();
+    root.querySelector('#aAddStep').onclick = addStep;
+    const kind = root.querySelector('#aKind');
+    const sync = () => { root.querySelector('#aDates').classList.toggle('hidden', kind.value !== 'vacation'); root.querySelector('#aAmountF').classList.toggle('hidden', !['payment', 'purchase'].includes(kind.value)); };
+    kind.onchange = sync; sync();
+    root.querySelector('#aOk').onclick = async () => {
+      const err = (m) => root.querySelector('#mErr').textContent = m;
+      const title = root.querySelector('#aTitle').value.trim();
+      const st = [...steps.querySelectorAll('select')].map((s) => s.value).filter(Boolean);
+      if (!title) return err('Напишите, что согласовать');
+      if (!st.length) return err('Выберите, кто согласует');
+      try {
+        let file = null;
+        const f = root.querySelector('#aFile').files[0];
+        if (f) {
+          if (f.size > MAX_FILE) return err('Файл больше 50 МБ');
+          const path = `appr/${state.me.id}/${crypto.randomUUID()}.${(f.name.split('.').pop() || 'bin').toLowerCase()}`;
+          const up = await sb.storage.from('sl-files').upload(path, f, { contentType: f.type || 'application/octet-stream' });
+          if (up.error) throw up.error;
+          file = { path, name: f.name, size: f.size };
+        }
+        const a = check(await sb.rpc('sl_approval_create', { p: { kind: kind.value, title, details: root.querySelector('#aDetails').value, amount: root.querySelector('#aAmount').value,
+          dateFrom: root.querySelector('#aFrom').value, dateTo: root.querySelector('#aTo').value, file, steps: st } }));
+        toast('✅ Заявка отправлена: ' + userName(st[0]));
+        openApproval(a.id);
+      } catch (e) { err(humanError(e)); }
+    };
+  });
+}
+async function openApproval(id) {
+  let a, ev = [];
+  try { a = check(await sb.from('sl_approvals').select('*').eq('id', id).single()); ev = check(await sb.from('sl_approval_events').select('*').eq('approval_id', id).order('id')); }
+  catch (e) { return toast(humanError(e)); }
+  const myTurn = a.status === 'pending' && a.steps[a.step] === state.me.id;
+  const ACT = { created: 'создал(а) заявку', approved: 'согласовал(а)', rejected: 'отклонил(а)', cancelled: 'отозвал(а)' };
+  openModal(`<h3>${APPR_KIND[a.kind]} · ${esc(a.title)}</h3><div class="modal-body">
+    <div class="td-row"><span>Статус</span><span class="tag appr-${a.status}">${APPR_ST[a.status]}</span></div>
+    <div class="td-row"><span>Автор</span><span>${esc(userName(a.created_by))}, ${new Date(a.created_at).toLocaleString('ru-RU')}</span></div>
+    ${a.amount ? `<div class="td-row"><span>Сумма</span><span><b>${Number(a.amount).toLocaleString('ru-RU')} ₽</b></span></div>` : ''}
+    ${a.date_from ? `<div class="td-row"><span>Даты</span><span>${a.date_from.split('-').reverse().join('.')} — ${(a.date_to || a.date_from).split('-').reverse().join('.')}</span></div>` : ''}
+    ${a.file ? `<div class="td-row"><span>Файл</span><a href="#" id="aDl">📎 ${esc(a.file.name)}</a></div>` : ''}
+    ${a.details ? `<div class="td-desc">${linkify(a.details)}</div>` : ''}
+    <div class="disc-title">Маршрут</div>
+    <div class="appr-steps">${a.steps.map((u, i) => { const e = ev.find((x) => x.user_id === u && ['approved', 'rejected'].includes(x.action));
+      const st = e ? e.action : (a.status === 'pending' && i === a.step ? 'now' : 'wait');
+      return `<div class="appr-step ${st}"><span class="dotn">${st === 'approved' ? '✓' : st === 'rejected' ? '✕' : i + 1}</span>${esc(userName(u))}${st === 'now' ? ' — <b>сейчас</b>' : ''}${e?.comment ? `<div class="u-meta">«${esc(e.comment)}»</div>` : ''}</div>`; }).join('')}</div>
+    <div class="disc-title">История</div>
+    ${ev.map((e) => `<div class="u-meta">${new Date(e.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} — ${esc(userName(e.user_id))} ${ACT[e.action] || e.action}${e.comment ? ': «' + esc(e.comment) + '»' : ''}</div>`).join('')}
+    ${myTurn ? '<label class="field" style="margin-top:12px"><span>Комментарий (необязательно)</span><input id="aCmt" maxlength="1000"></label>' : ''}
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot">${a.created_by === state.me.id && a.status === 'pending' ? '<button class="danger" id="aCancel">Отозвать</button>' : ''}<span class="spacer"></span>
+      ${myTurn ? '<button class="secondary" id="aNo" style="color:var(--danger)">Отклонить</button><button class="primary" id="aYes">Согласовать</button>' : '<button class="secondary" id="aBack">← Все заявки</button>'}</div>`,
+  (root) => {
+    const dl = root.querySelector('#aDl'); if (dl) dl.onclick = (e) => { e.preventDefault(); downloadFile(a.file.path, a.file.name); };
+    const back = root.querySelector('#aBack'); if (back) back.onclick = () => openApprovals();
+    const decide = async (ok) => { try { await rpc('sl_approval_decide', { p_id: id, p_approve: ok, p_comment: root.querySelector('#aCmt')?.value || '' }); toast(ok ? '✅ Согласовано' : 'Отклонено'); loadApprovals(); openApproval(id); } catch (e) { root.querySelector('#mErr').textContent = humanError(e); } };
+    const y = root.querySelector('#aYes'); if (y) y.onclick = () => decide(true);
+    const n = root.querySelector('#aNo'); if (n) n.onclick = () => { if (confirm('Отклонить заявку?')) decide(false); };
+    const c = root.querySelector('#aCancel'); if (c) c.onclick = async () => { if (!confirm('Отозвать заявку?')) return; try { await rpc('sl_approval_cancel', { p_id: id }); openApproval(id); } catch (e) { toast(humanError(e)); } };
+  }, 'wide');
+}
+
+// База знаний
+function mdLite(text) { // простая разметка: # заголовки, **жирный**, списки, ссылки
+  return esc(text).split('\n').map((l) => {
+    if (/^### /.test(l)) return `<h4>${l.slice(4)}</h4>`;
+    if (/^## /.test(l)) return `<h3>${l.slice(3)}</h3>`;
+    if (/^# /.test(l)) return `<h2>${l.slice(2)}</h2>`;
+    if (/^[-*] /.test(l)) return `<li>${l.slice(2)}</li>`;
+    return l ? `<p>${l}</p>` : '';
+  }).join('').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(<li>.*?<\/li>)+/g, (m) => `<ul>${m}</ul>`)
+    .replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+async function openKb(q = '') {
+  let rows = [];
+  try { rows = check(await sb.from('sl_kb').select('id, title, category, updated_at, updated_by, created_by').order('category').order('title')); } catch (e) { return toast(humanError(e)); }
+  const cats = [...new Set(rows.map((r) => r.category || 'Без раздела'))];
+  openModal(`<h3>📚 База знаний</h3><div class="modal-body">
+    <label class="field"><input id="kbQ" placeholder="Поиск по названию и тексту" value="${esc(q)}"></label>
+    <div id="kbList">${cats.map((c) => `<div class="disc-title">${esc(c)}</div>` + rows.filter((r) => (r.category || 'Без раздела') === c).map((r) => `<div class="person" data-kb="${r.id}"><span>📄</span><span style="flex:1">${esc(r.title)}<div class="u-meta">обновлено ${new Date(r.updated_at).toLocaleDateString('ru-RU')} · ${esc(userName(r.updated_by || r.created_by))}</div></span></div>`).join('')).join('') || '<p class="muted">Пока пусто. Добавьте регламенты, реквизиты, инструкции, контакты поставщиков.</p>'}</div></div>
+    <div class="modal-foot"><button class="primary" id="kbNew">+ Статья</button><span class="spacer"></span><button class="secondary" data-close>Закрыть</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelector('#kbNew').onclick = () => openKbEdit({});
+    root.querySelectorAll('[data-kb]').forEach((el) => el.onclick = () => openKbArticle(Number(el.dataset.kb)));
+    let t = null;
+    root.querySelector('#kbQ').oninput = (e) => { clearTimeout(t); t = setTimeout(async () => {
+      const v = e.target.value.trim().replace(/[,()*%\\]/g, ' ').trim();
+      if (!v) return openKb('');
+      const found = check(await sb.from('sl_kb').select('id, title, category, body').or(`title.ilike.*${v}*,body.ilike.*${v}*`).limit(50));
+      root.querySelector('#kbList').innerHTML = found.map((r) => `<div class="person" data-kb="${r.id}"><span>📄</span><span style="flex:1">${esc(r.title)}<div class="snip">${esc(r.category || '')} · ${esc(r.body.slice(0, 120))}</div></span></div>`).join('') || '<p class="muted">Ничего не найдено</p>';
+      root.querySelectorAll('[data-kb]').forEach((el) => el.onclick = () => openKbArticle(Number(el.dataset.kb)));
+    }, 300); };
+  }, 'wide');
+}
+async function openKbArticle(id) {
+  let r; try { r = check(await sb.from('sl_kb').select('*').eq('id', id).single()); } catch (e) { return toast(humanError(e)); }
+  openModal(`<h3>📄 ${esc(r.title)}</h3><div class="modal-body"><div class="u-meta" style="margin-bottom:10px">${esc(r.category || 'Без раздела')} · обновлено ${new Date(r.updated_at).toLocaleString('ru-RU')} · ${esc(userName(r.updated_by || r.created_by))}</div>
+    <div class="kb-body">${mdLite(r.body) || '<p class="muted">Пусто</p>'}</div></div>
+    <div class="modal-foot">${state.me.isAdmin || r.created_by === state.me.id ? '<button class="danger" id="kbDel">Удалить</button>' : ''}<span class="spacer"></span><button class="secondary" id="kbBack">← К списку</button><button class="primary" id="kbEdit">Изменить</button></div>`,
+  (root) => {
+    root.querySelector('#kbBack').onclick = () => openKb();
+    root.querySelector('#kbEdit').onclick = () => openKbEdit(r);
+    const d = root.querySelector('#kbDel'); if (d) d.onclick = async () => { if (!confirm(`Удалить статью «${r.title}»?`)) return; try { check(await sb.from('sl_kb').delete().eq('id', id)); openKb(); } catch (e) { toast(humanError(e)); } };
+  }, 'wide');
+}
+function openKbEdit(r) {
+  openModal(`<h3>${r.id ? 'Изменить статью' : 'Новая статья'}</h3><div class="modal-body">
+    <label class="field"><span>Название</span><input id="kbT" maxlength="200" value="${esc(r.title || '')}"></label>
+    <label class="field"><span>Раздел</span><input id="kbC" maxlength="60" value="${esc(r.category || '')}" placeholder="например, Регламенты, Реквизиты, Поставщики"></label>
+    <label class="field"><span>Текст</span><textarea id="kbB" style="min-height:260px" placeholder="# Заголовок&#10;**жирный текст**&#10;- пункт списка&#10;Ссылки вставляются как есть">${esc(r.body || '')}</textarea></label>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="kbSave">Сохранить</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = () => (r.id ? openKbArticle(r.id) : openKb());
+    root.querySelector('#kbSave').onclick = async () => {
+      const body = { title: root.querySelector('#kbT').value.trim(), category: root.querySelector('#kbC').value.trim(), body: root.querySelector('#kbB').value, updated_by: state.me.id, updated_at: new Date().toISOString() };
+      if (!body.title) return root.querySelector('#mErr').textContent = 'Укажите название';
+      try {
+        const row = r.id ? check(await sb.from('sl_kb').update(body).eq('id', r.id).select().single()) : check(await sb.from('sl_kb').insert({ ...body, created_by: state.me.id }).select().single());
+        openKbArticle(row.id);
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+  }, 'wide');
+}
+
+// Рабочий день
+state.workday = null;
+async function loadWorkday() {
+  const { data } = await sb.from('sl_workdays').select('*').eq('user_id', state.me.id).is('ended_at', null).order('id', { ascending: false }).limit(1).maybeSingle();
+  state.workday = data || null; renderWorkday();
+}
+function renderWorkday() {
+  const el = $('#navWork'); if (!el) return;
+  const w = state.workday;
+  el.querySelector('.label').innerHTML = w ? `Закончить день <small class="pos">с ${new Date(w.started_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small>` : 'Начать рабочий день';
+  el.querySelector('.ico').textContent = w ? '⏹' : '▶';
+  el.classList.toggle('working', !!w);
+}
+async function toggleWorkday() {
+  try {
+    const w = check(await sb.rpc('sl_workday', { p_action: state.workday ? 'end' : 'start' }));
+    if (state.workday) { const h = (Date.parse(w.ended_at) - Date.parse(w.started_at)) / 3600e3; toast(`⏹ Рабочий день закончен: ${Math.floor(h)} ч ${Math.round((h % 1) * 60)} мин`); state.workday = null; }
+    else { state.workday = w; toast('▶ Рабочий день начат. Хорошего дня!'); }
+    renderWorkday();
+  } catch (e) { toast(humanError(e)); }
+}
+async function openWorkReport() {
+  const to = new Date(), from = new Date(Date.now() - 13 * 864e5);
+  let rows = [];
+  try { rows = check(await sb.from('sl_workdays').select('*').gte('day', ymd(from)).order('day')); } catch (e) { return toast(humanError(e)); }
+  const days = []; for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) days.push(ymd(d));
+  const hrs = (r) => ((r.ended_at ? Date.parse(r.ended_at) : Date.now()) - Date.parse(r.started_at)) / 3600e3;
+  const users = activeUsers().sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const cell = (u, d) => { const rs = rows.filter((r) => r.user_id === u.id && r.day === d); if (!rs.length) return ''; const h = rs.reduce((s, r) => s + hrs(r), 0);
+    return `<span title="${rs.map((r) => new Date(r.started_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + '–' + (r.ended_at ? new Date(r.ended_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'сейчас')).join(', ')}">${h.toFixed(1)}</span>`; };
+  openModal(`<h3>⏱ Рабочее время за 2 недели</h3><div class="modal-body" style="overflow-x:auto">
+    <table class="rep work"><thead><tr><th>Сотрудник</th>${days.map((d) => `<th>${d.slice(8)}.${d.slice(5, 7)}</th>`).join('')}<th>Всего</th></tr></thead>
+    <tbody>${users.map((u) => `<tr><td>${esc(u.name)}</td>${days.map((d) => `<td>${cell(u, d)}</td>`).join('')}<td><b>${rows.filter((r) => r.user_id === u.id).reduce((s, r) => s + hrs(r), 0).toFixed(1)}</b></td></tr>`).join('')}</tbody></table>
+    <p class="muted">Часы по отметкам «Начать / Закончить рабочий день». Наведите на число, чтобы увидеть время.</p></div>
+    <div class="modal-foot"><button class="secondary" id="wCsv">⬇ Скачать (Excel)</button><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelector('#wCsv').onclick = () => {
+      const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+      const lines = [['Сотрудник', 'Дата', 'Начало', 'Конец', 'Часы'].map(q).join(';')].concat(rows.map((r) => [userName(r.user_id), r.day.split('-').reverse().join('.'),
+        new Date(r.started_at).toLocaleTimeString('ru-RU'), r.ended_at ? new Date(r.ended_at).toLocaleTimeString('ru-RU') : '', hrs(r).toFixed(2).replace('.', ',')].map(q).join(';')));
+      saveFile('﻿' + lines.join('\r\n'), `Рабочее время ${ymd(new Date())}.csv`, 'text/csv');
+    };
+  }, 'wide');
+}
+
 // ---------- Календарь ----------
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const eventFromRow = (e) => ({ id: e.id, userId: e.user_id, title: e.title, note: e.note, date: e.date, time: e.time, shared: e.shared, done: e.done, callChat: e.call_chat || null });
@@ -2542,7 +2771,7 @@ const taskFromRow = (t, commentCount = 0) => ({
   dueDate: t.due_date, dueTime: t.due_time, priority: t.priority, status: t.status,
   createdAt: Date.parse(t.created_at), updatedAt: Date.parse(t.updated_at), completedAt: t.completed_at ? Date.parse(t.completed_at) : null,
   commentCount: t.comment_count ?? commentCount,
-  repeat: t.repeat || '', files: t.files || [], sourceChat: t.source_chat || null, sourceMsg: t.source_msg || null,
+  repeat: t.repeat || '', files: t.files || [], sourceChat: t.source_chat || null, sourceMsg: t.source_msg || null, checklist: t.checklist || [],
 });
 const REPEAT_LABEL = { '': 'Не повторять', daily: 'Каждый день', weekly: 'Каждую неделю', monthly: 'Каждый месяц' };
 async function loadTasks() {
@@ -2673,6 +2902,8 @@ function renderTasks() {
     const empty = { mine: 'Открытых задач у вас нет 🎉', byme: 'Вы пока никому не поручали задач', all: 'Задач пока нет' }[f];
     html = `<div class="empty">${empty}${!state.showDone && done.length ? `<br><small>Выполненных: ${done.length}</small>` : ''}</div>`;
   }
+  if (state.taskBoard) return renderBoard(list);
+  $('#taskList').classList.remove('board');
   $('#taskList').innerHTML = html;
   $('#taskList').querySelectorAll('.task').forEach((el) => {
     const id = Number(el.dataset.id);
@@ -2700,6 +2931,7 @@ function taskRow(t) {
         ${t.createdBy !== t.assigneeId ? `<span title="Поручил">от ${esc(author.id === state.me.id ? 'вас' : author.name)}</span>` : ''}
         ${t.status !== 'new' ? `<span class="st ${t.status}">${STATUS_LABEL[t.status]}</span>` : ''}
         ${t.commentCount ? `<span class="t-comments" title="Комментарии">💬 ${t.commentCount}</span>` : ''}
+        ${t.checklist.length ? `<span title="Чек-лист">☑ ${t.checklist.filter((c) => c.done).length}/${t.checklist.length}</span>` : ''}
       </div>
     </div>
   </div>`;
@@ -2735,6 +2967,9 @@ function openTaskView(id) {
       <div class="td-row"><span>Создана</span><span>${fmt(t.createdAt)}</span></div>
       ${t.completedAt ? `<div class="td-row"><span>Выполнена</span><span>${fmt(t.completedAt)}</span></div>` : ''}
       ${t.description ? `<div class="td-desc">${linkify(t.description)}</div>` : ''}
+      <div class="disc-title">Чек-лист ${t.checklist.length ? `<span class="muted">${t.checklist.filter((c) => c.done).length} из ${t.checklist.length}</span>` : ''}</div>
+      <div class="checklist">${t.checklist.map((c, i) => `<label class="cl-item ${c.done ? 'done' : ''}"><input type="checkbox" data-cl="${i}" ${c.done ? 'checked' : ''} ${canChangeStatus(t) || canEditTask(t) ? '' : 'disabled'}><span>${esc(c.text)}</span>${canChangeStatus(t) || canEditTask(t) ? `<button data-cldel="${i}" title="Убрать">✕</button>` : ''}</label>`).join('')}
+        ${canChangeStatus(t) || canEditTask(t) ? '<div class="cl-add"><input id="clNew" maxlength="200" placeholder="+ пункт чек-листа (Enter)"></div>' : (t.checklist.length ? '' : '<span class="muted">—</span>')}</div>
       ${canChangeStatus(t) ? `<div class="status-btns">${['new', 'in_progress', 'done'].map((s) =>
         `<button data-status="${s}" class="${t.status === s ? 'active' : ''}">${{ new: '○ Новая', in_progress: '▶ В работе', done: '✓ Выполнена' }[s]}</button>`).join('')}</div>`
         : `<div class="td-row"><span>Статус</span><span class="st ${t.status}">${STATUS_LABEL[t.status]}</span></div>`}
@@ -2779,6 +3014,14 @@ function openTaskView(id) {
       });
       const edit = root.querySelector('#tEdit');
       if (edit) edit.onclick = () => openTaskForm(state.tasks.get(t.id));
+      const saveCl = async (list) => {
+        try { const row = await myTaskEdit(t.id, () => rpc('sl_task_checklist', { p_id: t.id, p_list: list })); state.tasks.set(t.id, taskFromRow(row, state.tasks.get(t.id)?.commentCount || 0)); openTaskView(t.id); rerenderTasks(); }
+        catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+      };
+      root.querySelectorAll('[data-cl]').forEach((cb) => cb.onchange = () => { const l = (state.tasks.get(t.id)?.checklist || []).map((c, i) => i === Number(cb.dataset.cl) ? { ...c, done: cb.checked } : c); saveCl(l); });
+      root.querySelectorAll('[data-cldel]').forEach((b) => b.onclick = (e) => { e.preventDefault(); saveCl((state.tasks.get(t.id)?.checklist || []).filter((_, i) => i !== Number(b.dataset.cldel))); });
+      const cln = root.querySelector('#clNew');
+      if (cln) cln.onkeydown = (e) => { if (e.key === 'Enter' && cln.value.trim()) { e.preventDefault(); saveCl([...(state.tasks.get(t.id)?.checklist || []), { text: cln.value.trim(), done: false }]); } };
       const src = root.querySelector('#tSrc');
       if (src) src.onclick = (e) => { e.preventDefault(); closeModal(); jumpTo(t.sourceMsg, t.sourceChat); };
       root.querySelectorAll('.t-file').forEach((a) => a.onclick = (e) => { e.preventDefault(); const f = t.files[Number(a.dataset.i)]; downloadFile(f.path, f.name); });
@@ -2955,6 +3198,34 @@ function openTaskForm(t = {}) {
 }
 $('#taskAdd').onclick = () => openTaskForm({});
 $('#taskReport').onclick = openTaskReport;
+$('#taskBoardBtn').onclick = () => { state.taskBoard = !state.taskBoard; try { localStorage.setItem('sl-board', state.taskBoard ? '1' : ''); } catch {} $('#taskBoardBtn').classList.toggle('on', state.taskBoard); renderTasks(); };
+try { state.taskBoard = localStorage.getItem('sl-board') === '1'; $('#taskBoardBtn').classList.toggle('on', state.taskBoard); } catch {}
+// Доска задач (канбан): перетаскивание между колонками меняет статус
+function renderBoard(list) {
+  const cols = [['new', 'Новые'], ['in_progress', 'В работе'], ['done', 'Готово']];
+  const box = $('#taskList');
+  box.classList.add('board');
+  box.innerHTML = cols.map(([st, title]) => {
+    const items = list.filter((t) => t.status === st).sort((a, b) => st === 'done' ? (b.completedAt || 0) - (a.completedAt || 0) : dueMoment(a) - dueMoment(b));
+    const shown = st === 'done' ? items.slice(0, 30) : items;
+    return `<div class="b-col" data-st="${st}"><div class="b-head">${title} <span class="n">${items.length}</span></div>
+      <div class="b-items">${shown.map((t) => { const due = dueLabel(t), who = state.users.get(t.assigneeId) || { id: t.assigneeId, name: '—' };
+        return `<div class="b-card ${isOverdue(t) ? 'overdue' : ''}" draggable="${canChangeStatus(t)}" data-id="${t.id}">
+          <div class="t-title">${t.priority ? '<span class="prio">!</span> ' : ''}${esc(t.title)}</div>
+          <div class="t-meta"><span class="due ${due.cls}">⏱ ${due.text}</span>${t.checklist.length ? `<span>☑ ${t.checklist.filter((c) => c.done).length}/${t.checklist.length}</span>` : ''}${t.commentCount ? `<span>💬 ${t.commentCount}</span>` : ''}</div>
+          <div class="t-meta"><span class="t-person">${avatar(who, 'xs')}${esc(who.name)}</span></div></div>`; }).join('') || '<div class="b-empty">Перетащите сюда</div>'}</div></div>`;
+  }).join('');
+  box.querySelectorAll('.b-card').forEach((el) => {
+    el.onclick = () => openTaskView(Number(el.dataset.id));
+    el.ondragstart = (e) => { e.dataTransfer.setData('text/plain', el.dataset.id); el.classList.add('dragging'); };
+    el.ondragend = () => el.classList.remove('dragging');
+  });
+  box.querySelectorAll('.b-col').forEach((col) => {
+    col.ondragover = (e) => { e.preventDefault(); col.classList.add('over'); };
+    col.ondragleave = () => col.classList.remove('over');
+    col.ondrop = (e) => { e.preventDefault(); col.classList.remove('over'); const id = Number(e.dataTransfer.getData('text/plain')); const t = state.tasks.get(id); if (t && t.status !== col.dataset.st) setTaskStatus(id, col.dataset.st); };
+  });
+}
 // Задача из сообщения: текст — в описание, ссылка на сообщение сохраняется
 function openTaskFromMessage(m) {
   const text = m.text || (m.file ? '📎 ' + m.file.name : '');
@@ -3046,6 +3317,8 @@ async function renderAdmin() {
   renderChannelsAdmin();
   renderGroupsAdmin();
   renderDmsAdmin();
+  const wc = $('#workCard');
+  if (wc) { wc.innerHTML = `<div class="admin-card-title">⏱ Рабочее время</div><div class="muted" style="margin-bottom:8px">Отметки сотрудников «Начать / Закончить рабочий день».</div><button class="secondary" id="wRep">Открыть табель за 2 недели</button>`; $('#wRep').onclick = openWorkReport; }
 }
 // Все личные переписки (сведения) — администратор может открыть для чтения
 async function renderDmsAdmin() {
@@ -3899,6 +4172,7 @@ function openDeepLink(hash) {
     return true;
   }
   if (key === 'tasks') { openTasks(); return true; }
+  if (key === 'approval' && value) { openApproval(Number(value)); return true; }
   if (key === 'msg' && value) { const [c, id] = decodeURIComponent(value).split(','); jumpTo(Number(id), c); return true; }
   if (key === 'ann') { openChat(state.current || `c:${state.channels[0]?.id}`); loadAnnouncements(); return true; }
   if (key === 'calendar') { openCalendar(); return true; }
