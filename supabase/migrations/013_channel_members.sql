@@ -1,0 +1,1 @@
+-- Каналы с участниками: sl_channel_members, sl_channels.is_public/auto_join, sl_channel_visible, sl_in_channel, sl_channel_set_members, sl_channel_set_public; sl_can_access/sl_chat_member_ids/sl_unread учитывают участников; каналы создаёт администратор. Применено миграциями shtark_link_channel_members, shtark_link_public_channels.

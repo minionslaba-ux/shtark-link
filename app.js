@@ -492,7 +492,10 @@ function renderChannelsAdmin() {
   const card = $('#chanCard');
   if (!card) return;
   card.innerHTML = `<div class="admin-card-title">Каналы</div>
-    ${state.channels.map((c) => `<label class="check"><input type="checkbox" data-ro="${c.id}" ${c.readonly ? 'checked' : ''}> # ${esc(c.name)} — только чтение (пишут администраторы)</label>`).join('')}`;
+    ${state.channels.map((c) => `<div class="u-row"><div class="u-main"><div class="u-name"># ${esc(c.name)} ${c.isPublic ? '<span class="tag shared">для всех</span>' : `<span class="tag">${chatMembers('c:' + c.id).length} уч.</span>`}</div>
+      <label class="check" style="margin:4px 0 0"><input type="checkbox" data-ro="${c.id}" ${c.readonly ? 'checked' : ''}> только чтение (пишут администраторы)</label></div>
+      <div class="u-actions"><button data-chset="${c.id}">Участники</button></div></div>`).join('')}`;
+  card.querySelectorAll('[data-chset]').forEach((b) => b.onclick = () => openChannelSettings(Number(b.dataset.chset)));
   card.querySelectorAll('[data-ro]').forEach((cb) => cb.onchange = async () => {
     try { await rpc('sl_set_channel_readonly', { p_id: Number(cb.dataset.ro), p_ro: cb.checked }); const c = state.channels.find((x) => x.id === Number(cb.dataset.ro)); if (c) c.readonly = cb.checked; toast('Сохранено'); }
     catch (e) { toast(humanError(e)); cb.checked = !cb.checked; }
@@ -548,12 +551,13 @@ async function start() {
   loadPrefsFromProfile(me);
   const [users, channels, groups, members] = await Promise.all([
     sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday'),
-    sb.from('sl_channels').select('id, name, readonly').order('id'),
+    sb.from('sl_channels').select('id, name, readonly, is_public, auto_join').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
   ]);
   check(users).forEach((u) => state.users.set(u.id, profileFromRow(u)));
-  state.channels = check(channels);
+  state.channels = check(channels).map(chanFromRow);
+  await loadChannelMembers();
   const mem = check(members);
   check(groups).forEach((g) => state.groups.set(g.id, {
     id: g.id, name: g.name, createdBy: g.created_by, members: mem.filter((m) => m.group_id === g.id).map((m) => m.user_id),
@@ -563,6 +567,7 @@ async function start() {
   $('#app').classList.remove('hidden');
   $('#meName').textContent = state.me.name;
   $('#navAdmin').classList.toggle('hidden', !state.me.isAdmin);
+  $('#newChannelBtn').classList.toggle('hidden', !state.me.isAdmin);
 
   const { data: { session } } = await sb.auth.getSession();
   sb.realtime.setAuth(session.access_token);
@@ -633,14 +638,8 @@ function connectRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reactions' }, onReactionChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reads' }, onReadChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_profiles' }, onProfileChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_channels' }, (p) => {
-      if (!p.new?.id) return;
-      const c = state.channels.find((c) => c.id === p.new.id);
-      if (c) Object.assign(c, { name: p.new.name, readonly: !!p.new.readonly });
-      else state.channels.push({ id: p.new.id, name: p.new.name, readonly: !!p.new.readonly });
-      renderSidebar();
-      if (state.view === 'chat' && state.current === 'c:' + p.new.id) renderChatHeader();
-    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_channels' }, () => reloadChannels())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_channel_members' }, () => reloadChannels())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_announcements' }, () => loadAnnouncements())
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sl_acks' }, () => loadAnnouncements())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_groups' }, onGroupChange)
@@ -810,7 +809,10 @@ function chatTitle(chat) {
   return other ? other.name : '';
 }
 function chatMembers(chat) {
-  if (chat.startsWith('c:')) return activeUsers().map((u) => u.id);
+  if (chat.startsWith('c:')) {
+    const c = state.channels.find((x) => `c:${x.id}` === chat);
+    return !c || c.isPublic ? activeUsers().map((u) => u.id) : (c.members || []).filter((id) => state.users.get(id) && !state.users.get(id).disabled);
+  }
   if (chat.startsWith('g:')) return state.groups.get(Number(chat.slice(2)))?.members || [];
   return chat.split(':').slice(1);
 }
@@ -869,28 +871,91 @@ $('#navCalendar').onclick = () => openCalendar();
 $('#navTasks').onclick = () => openTasks();
 $('#navAdmin').onclick = () => openAdmin();
 
+// ---------- Каналы: «для всех» или только для участников ----------
+const chanFromRow = (c) => ({ id: c.id, name: c.name, readonly: !!c.readonly, isPublic: !!c.is_public, autoJoin: !!c.auto_join, members: [] });
+async function loadChannelMembers() {
+  const { data } = await sb.from('sl_channel_members').select('channel_id, user_id');
+  state.channels.forEach((c) => { c.members = (data || []).filter((m) => m.channel_id === c.id).map((m) => m.user_id); });
+}
+async function reloadChannels() {
+  try {
+    const rows = check(await sb.from('sl_channels').select('id, name, readonly, is_public, auto_join').order('id'));
+    state.channels = rows.map(chanFromRow);
+    await loadChannelMembers();
+  } catch { return; }
+  renderSidebar();
+  if (state.view === 'admin') renderChannelsAdmin();
+  if (state.current?.startsWith('c:') && !state.channels.some((c) => `c:${c.id}` === state.current)) {
+    toast('Вас убрали из канала'); openChat(`c:${state.channels[0]?.id}`);
+  } else if (state.view === 'chat' && state.current?.startsWith('c:')) renderChatHeader();
+}
+function channelFormHtml(c = {}) {
+  const members = c.members || [];
+  const list = activeUsers().sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  return `<label class="check"><input type="checkbox" id="chPublic" ${c.isPublic ? 'checked' : ''}> <b>Для всех сотрудников</b> — канал видят и в нём пишут все, включая новых</label>
+    <div id="chMembersBox" class="${c.isPublic ? 'hidden' : ''}">
+      <label class="check"><input type="checkbox" id="chAuto" ${c.autoJoin ? 'checked' : ''}> Добавлять сюда новых сотрудников автоматически</label>
+      <div class="field"><span>Участники <a href="#" id="chAll" style="float:right;font-size:13px">отметить всех</a></span>
+        <div class="people">${list.map((u) => `<label class="person"><input type="checkbox" value="${u.id}" ${members.includes(u.id) || (!c.id && u.id === state.me.id) ? 'checked' : ''}>${avatar(u, 'sm')}
+          <span class="pname">${esc(u.name)}${u.id === state.me.id ? ' (вы)' : ''}${u.position ? `<small class="pos">${esc(u.position)}</small>` : ''}</span></label>`).join('')}</div></div>
+    </div>`;
+}
+function mountChannelForm(root) {
+  const pub = root.querySelector('#chPublic');
+  pub.onchange = () => root.querySelector('#chMembersBox').classList.toggle('hidden', pub.checked);
+  root.querySelector('#chAll').onclick = (e) => { e.preventDefault(); root.querySelectorAll('#chMembersBox .people input').forEach((i) => i.checked = true); };
+  return () => ({ isPublic: pub.checked, auto: root.querySelector('#chAuto').checked,
+    members: [...root.querySelectorAll('#chMembersBox .people input:checked')].map((i) => i.value) });
+}
 $('#newChannelBtn').onclick = () => openModal(`
   <h3>Новый канал</h3>
   <div class="modal-body">
-    <p style="margin:0 0 12px;color:var(--muted);font-size:14px">Канал виден всем сотрудникам.</p>
     <label class="field"><span>Название</span><input id="mName" maxlength="40" placeholder="например, продажи"></label>
+    ${channelFormHtml({})}
     <div class="modal-err" id="mErr"></div>
   </div>
   <div class="modal-foot"><button class="secondary" data-close>Отмена</button><button class="primary" id="mOk">Создать</button></div>`,
   (root) => {
     root.querySelector('[data-close]').onclick = closeModal;
-    const ok = async () => {
+    const read = mountChannelForm(root);
+    root.querySelector('#mOk').onclick = async () => {
       const name = root.querySelector('#mName').value.trim().toLowerCase().replace(/\s+/g, '-');
-      if (!name) return;
+      if (!name) return root.querySelector('#mErr').textContent = 'Укажите название';
+      const f = read();
       try {
-        const c = check(await sb.from('sl_channels').insert({ name, created_by: state.me.id }).select('id, name').single());
-        if (!state.channels.some((x) => x.id === c.id)) state.channels.push(c);
-        closeModal(); openChat(`c:${c.id}`);
+        const c = check(await sb.from('sl_channels').insert({ name, created_by: state.me.id }).select('id').single());
+        if (f.isPublic) await rpc('sl_channel_set_public', { p_channel: c.id, p_public: true });
+        else await rpc('sl_channel_set_members', { p_channel: c.id, p_users: [...new Set([...f.members, state.me.id])], p_auto: f.auto });
+        closeModal(); await reloadChannels(); openChat(`c:${c.id}`);
       } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
     };
-    root.querySelector('#mOk').onclick = ok;
-    root.querySelector('#mName').onkeydown = (e) => e.key === 'Enter' && ok();
   });
+function openChannelSettings(id) {
+  const c = state.channels.find((x) => x.id === id);
+  if (!c) return;
+  if (!state.me.isAdmin) {
+    const list = chatMembers(`c:${id}`).map((u) => state.users.get(u)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    return openModal(`<h3># ${esc(c.name)}</h3><div class="modal-body">
+      <p class="muted">${c.isPublic ? 'Канал для всех сотрудников.' : `Участников: ${list.length}. Состав канала меняет администратор.`}</p>
+      ${c.isPublic ? '' : `<div class="people">${list.map((u) => `<div class="person" style="cursor:default">${avatar(u, 'sm')}<span class="pname">${esc(u.name)}</span><span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></div>`).join('')}</div>`}
+      </div><div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+      (root) => root.querySelector('[data-close]').onclick = closeModal);
+  }
+  openModal(`<h3>Канал # ${esc(c.name)}</h3><div class="modal-body">${channelFormHtml(c)}<div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="mOk">Сохранить</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const read = mountChannelForm(root);
+    root.querySelector('#mOk').onclick = async () => {
+      const f = read();
+      try {
+        if (f.isPublic !== c.isPublic) await rpc('sl_channel_set_public', { p_channel: id, p_public: f.isPublic });
+        if (!f.isPublic) await rpc('sl_channel_set_members', { p_channel: id, p_users: f.members, p_auto: f.auto });
+        closeModal(); await reloadChannels(); toast('Сохранено');
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+  }, 'wide');
+}
 
 // ---------- Групповые чаты ----------
 $('#newGroupBtn').onclick = () => openModal(`
@@ -976,6 +1041,10 @@ function renderChatHeader() {
   const callBtn = call.chat === chat ? ''
     : n ? `<button class="hbtn" id="callBtn" style="border-color:#22c55e;color:#16a34a">📞 <span class="lbl">Присоединиться</span> (${n})</button>`
     : `<button class="hbtn" id="callBtn" title="Голосовой звонок">📞 <span class="lbl">${chat.startsWith('d:') ? 'Позвонить' : 'Созвон'}</span></button>`;
+  if (chat.startsWith('c:')) {
+    const c = state.channels.find((x) => `c:${x.id}` === chat);
+    if (c) { const n = chatMembers(chat).length; actions = `<button class="hbtn" id="chanBtn" title="Участники канала">👥 <span class="lbl">${c.isPublic ? 'Для всех' : n + ' ' + plural(n, 'участник', 'участника', 'участников')}</span></button>`; }
+  }
   if (chat.startsWith('g:')) {
     const g = state.groups.get(Number(chat.slice(2)));
     if (g) actions = `<button class="hbtn" id="groupBtn">👥 ${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')}</button>`;
@@ -996,6 +1065,8 @@ function renderChatHeader() {
   $('#chatActions').innerHTML = (self ? '' : callBtn) + ' ' + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
+  const chb = $('#chanBtn');
+  if (chb) chb.onclick = () => openChannelSettings(Number(chat.slice(2)));
   const gb = $('#groupBtn');
   if (gb) gb.onclick = () => openGroupSettings(Number(chat.slice(2)));
   const ab = $('#assignBtn');
