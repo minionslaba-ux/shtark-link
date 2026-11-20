@@ -1766,23 +1766,39 @@ async function collectCallDiag() {
   const LK = window.LivekitClient, lp = room.localParticipant;
   const micPub = lp.getTrackPublication(LK.Track.Source.Microphone);
   const micStats = await statsOf(micPub?.track);
-  let bytesSent = 0;
-  micStats?.forEach((s) => { if (s.type === 'outbound-rtp') bytesSent += s.bytesSent || 0; });
+  let bytesSent = 0, srvLost = null, srvRtt = null;
+  micStats?.forEach((s) => {
+    if (s.type === 'outbound-rtp') bytesSent += s.bytesSent || 0;
+    if (s.type === 'remote-inbound-rtp') { srvLost = s.fractionLost ?? null; srvRtt = s.roundTripTime ?? null; } // так сервер видит наш звук
+  });
   const remotes = [];
   for (const p of room.remoteParticipants.values()) {
     const pub = p.getTrackPublication(LK.Track.Source.Microphone);
     const st = await statsOf(pub?.track);
     let bytesRecv = 0, packetsLost = 0;
     st?.forEach((s) => { if (s.type === 'inbound-rtp') { bytesRecv += s.bytesReceived || 0; packetsLost += s.packetsLost || 0; } });
+    // собеседник «подключён», а его голос до нас не доходит
+    if (pub?.isSubscribed && !pub.isMuted && bytesRecv === 0) {
+      call.zero = call.zero || {};
+      const z = (call.zero[p.identity] = (call.zero[p.identity] || 0) + 1);
+      if (z === 3) { // ~12 с тишины по сети — просим его переподключиться через ретранслятор
+        callLog('nohear-send', userName(p.identity));
+        state.rt?.send({ type: 'broadcast', event: 'call', payload: { type: 'nohear', chat, to: p.identity, from: state.me.id } });
+      }
+      if (z === 7 && !call.relay) { callLog('nohear-self'); setTimeout(() => call.chat === chat && rejoinViaRelay(chat), 0); }
+    } else if (call.zero) call.zero[p.identity] = 0;
     remotes.push({ who: userName(p.identity), audioPub: !!pub, subscribed: !!pub?.isSubscribed, muted: !!pub?.isMuted,
       level: Math.round((p.audioLevel || 0) * 100) / 100, bytesRecv, packetsLost, pair: pairInfo(st) });
   }
   const audioEls = [...document.querySelectorAll('#callAudio audio')].map((a) => ({ paused: a.paused, muted: a.muted, vol: a.volume }));
+  const b = call.blessed;
+  if (b && !b.closest('#callAudio')) audioEls.push({ blessed: true, paused: b.paused, muted: b.muted, vol: b.volume, src: !!b.srcObject });
   const data = {
     v: APP_VERSION, relay: !!call.relay, pc: pcStates(room), log: call.log || [],
     ua: navigator.userAgent.slice(0, 160), standalone: isStandalone, state: room.state, canPlayAudio: room.canPlaybackAudio,
     mic: { want: call.mic, published: !!micPub, muted: !!micPub?.isMuted, level: Math.round((lp.audioLevel || 0) * 100) / 100,
-      bytesSent, error: call.micError || null, pair: pairInfo(micStats) },
+      bytesSent, srvLost, srvRtt, error: call.micError || null, pair: pairInfo(micStats),
+      track: micPub?.track?.mediaStreamTrack ? { state: micPub.track.mediaStreamTrack.readyState, enabled: micPub.track.mediaStreamTrack.enabled, muted: micPub.track.mediaStreamTrack.muted, label: micPub.track.mediaStreamTrack.label.slice(0, 60) } : null },
     remotes, audioEls, secs: Math.round((Date.now() - call.started) / 1000),
   };
   sb.from('sl_call_diag').upsert({ user_id: state.me.id, device: deviceId, chat, data, updated_at: new Date().toISOString() }).then(() => {}, () => {});
@@ -1805,7 +1821,14 @@ function unlockAudio() {
 function pcStates(room) {
   const pm = room?.engine?.pcManager;
   const st = (t) => { try { return t?.getConnectionState?.() || t?.pc?.connectionState || null; } catch { return null; } };
-  return { pub: st(pm?.publisher), sub: st(pm?.subscriber) };
+  let pub = st(pm?.publisher), sub = st(pm?.subscriber);
+  if (!pub && !sub && pm) { // режим одного соединения (livekit-client 2.2x): ищем его среди полей
+    for (const k of Object.keys(pm)) {
+      const v = pm[k];
+      if (v && v.pc instanceof RTCPeerConnection) { pub = sub = v.pc.connectionState; break; }
+    }
+  }
+  return { pub, sub };
 }
 function mediaConnected(room) {
   const { pub, sub } = pcStates(room);
@@ -1975,6 +1998,7 @@ async function leaveCall() {
   await room.disconnect().catch(() => {});
 }
 function cleanupCall(o = {}) {
+  call.zero = null;
   clearInterval(call.timer); clearInterval(call.diagTimer); clearTimeout(call.ringTimeout);
   stopRingback();
   const ctx = call.audioCtx; call.audioCtx = null;
@@ -2131,6 +2155,13 @@ let ringAudio = null, incomingChat = null, incomingTimeout = null;
 function onCallSignal(p) {
   if (!p || p.from === state.me.id) return;
   if (p.type === 'hello') { if (call.chat) announceCall(); return; }
+  if (p.type === 'nohear') { // нас не слышат — переподключаемся через защищённый ретранслятор
+    if (p.to === state.me.id && call.chat === p.chat && call.room && !call.relay && !call.joining) {
+      callLog('nohear-recv', userName(p.from));
+      rejoinViaRelay(p.chat);
+    }
+    return;
+  }
   if (p.type === 'state') {
     callStates.set(p.from, { chat: p.chat, until: Date.now() + 40000 });
     rebuildInCall();
