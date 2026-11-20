@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shtark Link</title>
+<meta name="description" content="Корпоративный мессенджер компании Shtark">
+<meta name="theme-color" content="#1f2430">
+<meta name="apple-mobile-web-app-title" content="Shtark Link">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --side: #1f2430; --side-text: #c9cdd6; --side-active: #3b82f6;
+    --text: #1d2129; --muted: #7a808c; --border: #e3e5ea; --accent: #3b82f6; --accent-soft: #e8f0fe;
+    --shared: #3b82f6; --personal: #10b981; --danger: #d93025;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 15px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--text); background: var(--bg); }
+  button { font: inherit; cursor: pointer; }
+  input, textarea, select { font: inherit; color: inherit; }
+  .hidden { display: none !important; }
+
+  /* Вход */
+  #auth { height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .auth-card { background: var(--panel); border-radius: 12px; padding: 28px; width: 100%; max-width: 360px; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
+  .brand-big { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .brand-big img { width: 52px; height: 52px; }
+  .auth-card h1 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
+  .auth-card p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; color: #fff; font-size: 17px; letter-spacing: -.01em; }
+  .brand img { width: 28px; height: 28px; }
+  .brand b { font-weight: 700; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; background: var(--bg); border-radius: 8px; padding: 4px; }
+  .tabs button { flex: 1; border: 0; background: transparent; padding: 8px; border-radius: 6px; color: var(--muted); }
+  .tabs button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .field { display: block; margin-bottom: 12px; }
+  .field > span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; outline: none; background: #fff; }
+  .field textarea { resize: vertical; min-height: 70px; }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); }
+  .primary { padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; }
+  .secondary { padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--text); }
+  .danger { padding: 10px 16px; border: 0; border-radius: 8px; background: none; color: var(--danger); }
+  .auth-card .primary { width: 100%; }
+  .error { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 8px; }
+
+  /* Каркас */
+  #app { height: 100%; display: flex; }
+  #sidebar { width: 260px; flex-shrink: 0; background: var(--side); color: var(--side-text); display: flex; flex-direction: column; }
+  .me { padding: 16px; border-bottom: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; gap: 10px; }
+  .me .name { color: #fff; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .me button { background: none; border: 0; color: var(--side-text); font-size: 13px; }
+  .side-scroll { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .side-title { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+  .side-title button { background: none; border: 0; color: var(--side-text); font-size: 18px; line-height: 1; padding: 0 4px; }
+  .side-hint { padding: 2px 16px 6px; font-size: 13px; opacity: .5; }
+  .chat-item { display: flex; align-items: center; gap: 8px; padding: 6px 16px; cursor: pointer; }
+  .chat-item:hover { background: rgba(255,255,255,.06); }
+  .chat-item.active { background: var(--side-active); color: #fff; }
+  .chat-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-item.unread .label { color: #fff; font-weight: 600; }
+  .chat-item.nav { margin: 4px 0; font-weight: 500; }
+  .badge { background: #ef4444; color: #fff; font-size: 11px; border-radius: 10px; padding: 1px 7px; font-weight: 600; }
+  .badge.soft { background: rgba(255,255,255,.18); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; flex-shrink: 0; }
+  .dot.on { background: #22c55e; }
+  .ico { width: 16px; text-align: center; opacity: .7; flex-shrink: 0; }
+
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel); position: relative; }
+  .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .header { min-height: 56px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 8px 16px; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+  .header h2 { margin: 0; font-size: 17px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 120px; }
+  .header .sub { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .menuBtn { display: none; background: none; border: 0; font-size: 22px; padding: 0 4px; }
+  .hbtn { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+  .hbtn:hover { border-color: var(--accent); }
+  .hbtn.primary-sm { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+  /* Чат */
+  #messages { flex: 1; overflow-y: auto; padding: 16px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 40px; }
+  .day { text-align: center; margin: 16px 0 8px; font-size: 12px; color: var(--muted); }
+  .sys { text-align: center; font-size: 13px; color: var(--muted); margin: 8px 0; }
+  .msg { display: flex; gap: 10px; padding: 3px 0; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; flex-shrink: 0; font-size: 14px; }
+  .avatar.sm { width: 28px; height: 28px; font-size: 12px; }
+  .msg.cont .avatar { visibility: hidden; height: 0; }
+  .msg .body { min-width: 0; flex: 1; }
+  .msg .meta { font-size: 13px; margin-bottom: 1px; }
+  .msg .meta b { margin-right: 6px; }
+  .msg .meta span { color: var(--muted); font-size: 12px; }
+  .msg.cont .meta { display: none; }
+  .msg .text { white-space: pre-wrap; word-wrap: break-word; }
+  .msg .text a { color: var(--accent); }
+  .file-card { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 4px; text-decoration: none; color: var(--text); max-width: 100%; background: #fafbfc; }
+  .file-card:hover { border-color: var(--accent); }
+  .file-icon { width: 36px; height: 36px; border-radius: 6px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .file-card .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .file-card .fsize { font-size: 12px; color: var(--muted); }
+  .img-preview { display: block; margin-top: 4px; max-width: min(360px, 100%); max-height: 280px; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
+  #typing { height: 20px; padding: 0 16px; font-size: 12px; color: var(--muted); }
+  .composer { border-top: 1px solid var(--border); padding: 10px 16px 14px; }
+  #uploads:empty { display: none; }
+  .upload-row { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .upload-row progress { width: 120px; vertical-align: middle; margin-left: 8px; }
+  .input-row { display: flex; align-items: flex-end; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; }
+  .input-row:focus-within { border-color: var(--accent); }
+  .input-row textarea { flex: 1; border: 0; outline: none; resize: none; max-height: 160px; padding: 6px; background: transparent; }
+  .icon-btn { border: 0; background: none; font-size: 20px; padding: 4px 8px; color: var(--muted); border-radius: 6px; }
+  .icon-btn:hover { background: var(--bg); }
+  .send-btn { border: 0; background: var(--accent); color: #fff; border-radius: 8px; padding: 7px 14px; font-weight: 600; }
+  #drop { position: absolute; inset: 0; background: rgba(59,130,246,.12); border: 3px dashed var(--accent); display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--accent); font-weight: 600; pointer-events: none; z-index: 10; }
+
+  /* Календарь */
+  .cal-nav { display: flex; align-items: center; gap: 6px; }
+  .cal-nav .month { font-weight: 600; min-width: 140px; text-align: center; }
+  .seg { display: inline-flex; background: var(--bg); border-radius: 8px; padding: 3px; }
+  .seg button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font-size: 13px; color: var(--muted); }
+  .seg button.active { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+  .cal-body { flex: 1; display: flex; min-height: 0; }
+  .cal-grid-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 12px; }
+  .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); font-size: 12px; color: var(--muted); text-align: center; padding-bottom: 6px; }
+  .cal-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: minmax(80px, 1fr); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+  .cell { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 4px; cursor: pointer; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+  .cell:hover { background: #fafbfc; }
+  .cell.other { background: #fafafa; }
+  .cell.other .num { color: #b5b9c1; }
+  .cell.weekend .num { color: #ef4444; }
+  .cell.selected { background: var(--accent-soft); }
+  .cell .num { font-size: 13px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+  .cell.today .num { background: var(--accent); color: #fff !important; font-weight: 700; }
+  .chip { font-size: 12px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid var(--personal); background: #ecfdf5; }
+  .chip.shared { border-left-color: var(--shared); background: var(--accent-soft); }
+  .chip.done { text-decoration: line-through; opacity: .55; }
+  .more { font-size: 11px; color: var(--muted); padding-left: 4px; }
+  .dots { display: none; gap: 3px; justify-content: center; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--personal); }
+  .dots i.shared { background: var(--shared); }
+
+  .day-panel { width: 340px; flex-shrink: 0; border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .day-panel h3 { margin: 0; padding: 16px 16px 4px; font-size: 16px; }
+  .day-panel .count { padding: 0 16px 10px; font-size: 13px; color: var(--muted); }
+  #dayList { flex: 1; overflow-y: auto; padding: 0 12px; }
+  .ev { display: flex; gap: 10px; padding: 10px 8px; border-radius: 8px; border-left: 3px solid var(--personal); margin-bottom: 6px; background: #fafbfc; }
+  .ev.shared { border-left-color: var(--shared); }
+  .ev input[type=checkbox] { width: 18px; height: 18px; margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+  .ev .ev-body { flex: 1; min-width: 0; }
+  .ev .ev-title { font-weight: 500; word-wrap: break-word; }
+  .ev.done .ev-title { text-decoration: line-through; color: var(--muted); }
+  .ev .ev-note { font-size: 13px; color: var(--muted); white-space: pre-wrap; word-wrap: break-word; margin-top: 2px; }
+  .ev .ev-meta { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #ecfdf5; color: #047857; }
+  .tag.shared { background: var(--accent-soft); color: #1d4ed8; }
+  .ev .ev-time { font-weight: 600; color: var(--text); }
+  .ev-actions { display: flex; flex-direction: column; gap: 2px; }
+  .ev-actions button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; color: var(--muted); font-size: 14px; }
+  .ev-actions button:hover { background: var(--border); }
+  .day-panel .add { margin: 12px 16px 16px; }
+
+  /* Модальные окна */
+  #modal { position: fixed; inset: 0; background: rgba(15,18,25,.45); display: flex; align-items: center; justify-content: center; z-index: 90; padding: 16px; }
+  .modal-card { background: #fff; border-radius: 12px; width: 100%; max-width: 440px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
+  .modal-card h3 { margin: 0; padding: 18px 20px 10px; font-size: 18px; }
+  .modal-body { padding: 4px 20px; overflow-y: auto; }
+  .modal-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 20px 18px; align-items: center; }
+  .modal-foot .spacer { flex: 1; }
+  .people { border: 1px solid var(--border); border-radius: 8px; max-height: 260px; overflow-y: auto; }
+  .person { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
+  .person + .person { border-top: 1px solid var(--border); }
+  .person:hover { background: #fafbfc; }
+  .person input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .person .pname { flex: 1; }
+  .row { display: flex; gap: 10px; }
+  .row .field { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; cursor: pointer; }
+  .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .modal-err { color: var(--danger); font-size: 13px; min-height: 18px; }
+
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 100; cursor: zoom-out; }
+  #lightbox img { max-width: 95vw; max-height: 95vh; }
+  #toast { position: fixed; right: 16px; bottom: 16px; z-index: 95; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: #1f2430; color: #fff; padding: 12px 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); max-width: 320px; font-size: 14px; cursor: pointer; }
+
+  .chip.tk { border-left-color: #f59e0b; background: #fff7ed; }
+  .chip.tk.overdue { border-left-color: var(--danger); background: #fef2f2; color: var(--danger); }
+  .dots i.tk { background: #f59e0b; }
+  .ev.tk { border-left-color: #f59e0b; cursor: pointer; }
+  .ev.tk:hover { background: #fff7ed; }
+  .panel-sub { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 8px 6px; }
+
+  /* Задачи */
+  .task-list { flex: 1; overflow-y: auto; padding: 8px 16px 24px; }
+  .task-group { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 4px 6px; display: flex; gap: 6px; align-items: center; }
+  .task-group.overdue { color: var(--danger); }
+  .task-group .n { background: var(--bg); color: var(--muted); border-radius: 10px; padding: 0 7px; font-size: 11px; }
+  .task { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: #fff; }
+  .task:hover { border-color: #c7cbd3; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+  .task.overdue { border-left: 3px solid var(--danger); }
+  .task.done .t-title { text-decoration: line-through; color: var(--muted); }
+  .t-check { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #c7cbd3; background: #fff; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; padding: 0; margin-top: 1px; }
+  .t-check:hover:not(:disabled) { border-color: #22c55e; }
+  .t-check.done { background: #22c55e; border-color: #22c55e; }
+  .t-check.in_progress { border-color: var(--accent); background: conic-gradient(var(--accent) 0 50%, #fff 50% 100%); }
+  .t-check:disabled { cursor: default; }
+  .t-body { flex: 1; min-width: 0; }
+  .t-title { font-weight: 500; word-wrap: break-word; }
+  .t-desc { font-size: 13px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .t-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; color: var(--muted); align-items: center; }
+  .t-person { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+  .avatar.xs { width: 20px; height: 20px; font-size: 9px; }
+  .due { font-weight: 500; }
+  .due.overdue { color: var(--danger); }
+  .due.soon { color: #d97706; }
+  .prio { color: var(--danger); font-weight: 700; }
+  .st { font-size: 11px; padding: 1px 7px; border-radius: 4px; background: var(--bg); color: var(--muted); }
+  .st.in_progress { background: var(--accent-soft); color: #1d4ed8; }
+  .st.done { background: #dcfce7; color: #15803d; }
+  .task-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px 0; font-size: 14px; }
+  .task-toolbar select { padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+  .field select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; outline: none; }
+  .td-row { display: flex; gap: 8px; padding: 6px 0; font-size: 14px; }
+  .td-row > span:first-child { width: 110px; color: var(--muted); flex-shrink: 0; }
+  .td-desc { white-space: pre-wrap; word-wrap: break-word; background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-size: 14px; }
+  .status-btns { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .status-btns button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: #fff; font-size: 14px; }
+  .status-btns button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .modal-card.wide { max-width: 600px; }
+  .me .bell { font-size: 16px; padding: 2px 6px; border-radius: 6px; position: relative; }
+  .me .bell:hover { background: rgba(255,255,255,.08); }
+  .me .bell.off::after { content: ''; position: absolute; top: 2px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; }
+  .push-prompt { margin: 6px 12px 4px; padding: 10px 12px; border-radius: 10px; background: rgba(59,130,246,.18); color: #dbe7ff; font-size: 13px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+  .push-prompt:hover { background: rgba(59,130,246,.28); }
+  .push-prompt b { color: #fff; }
+  .push-status { padding: 10px 12px; border-radius: 8px; background: var(--bg); font-size: 14px; margin-bottom: 12px; }
+  .push-status.ok { background: #dcfce7; color: #166534; }
+  .push-status.warn { background: #fef3c7; color: #92400e; }
+  .howto { margin: 6px 0 10px; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+  .t-comments { font-size: 12px; color: var(--muted); }
+  .disc-title { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .cm { display: flex; gap: 10px; padding: 6px 0; }
+  .cm .cm-body { flex: 1; min-width: 0; }
+  .cm .cm-meta { font-size: 13px; }
+  .cm .cm-meta span { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  .cm .cm-text { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
+  .cm .cm-text a { color: var(--accent); }
+  .cm .cm-del { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 0 4px; visibility: hidden; }
+  .cm:hover .cm-del { visibility: visible; }
+  .cm-sys { font-size: 12px; color: var(--muted); padding: 4px 0 4px 38px; }
+  .cm-empty { font-size: 13px; color: var(--muted); padding: 4px 0 8px; }
+  .cm-input { display: flex; gap: 8px; align-items: flex-end; margin: 8px 0 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; }
+  .cm-input:focus-within { border-color: var(--accent); }
+  .cm-input textarea { flex: 1; border: 0; outline: none; resize: none; padding: 6px; min-height: 36px; max-height: 140px; background: transparent; }
+  @media (hover: none) { .cm .cm-del { visibility: visible; } }
+
+
+  /* Администрирование */
+  .admin-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; max-width: 900px; width: 100%; }
+  .admin-card { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: #fff; }
+  .admin-card-title { font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .admin-card-title .n { background: var(--bg); color: var(--muted); border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 500; }
+  .invite-code { font: 600 22px/1.2 ui-monospace, Menlo, Consolas, monospace; letter-spacing: .12em; background: var(--bg); border-radius: 8px; padding: 8px 14px; display: inline-block; user-select: all; }
+  .invite-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .u-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .u-row:first-child { border-top: 0; }
+  .u-row.off { opacity: .55; }
+  .u-main { flex: 1; min-width: 160px; }
+  .u-name { font-weight: 500; }
+  .u-meta { font-size: 12px; color: var(--muted); }
+  .u-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .u-actions button { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+  .u-actions button:hover { border-color: var(--accent); }
+  .u-actions button.warn { color: var(--danger); }
+  .u-actions button.warn:hover { border-color: var(--danger); }
+  .cred { background: var(--bg); border-radius: 8px; padding: 12px; font: 14px/1.6 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; user-select: all; }
+
+  /* Звонки */
+  .call-live { color: #16a34a; font-weight: 600; }
+  .chat-item .call-ind { font-size: 12px; }
+  #callPanel { position: fixed; right: 16px; bottom: 16px; width: 340px; max-width: calc(100vw - 32px); background: #111827; color: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.35); z-index: 80; display: flex; flex-direction: column; overflow: hidden; }
+  #callPanel.big { inset: 16px; width: auto; max-width: none; }
+  .call-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .call-dot { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,.25); flex-shrink: 0; }
+  .call-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .call-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  .call-title span { font-size: 12px; color: #9ca3af; }
+  .call-icon { background: rgba(255,255,255,.1); border: 0; color: #fff; border-radius: 8px; width: 32px; height: 32px; font-size: 16px; }
+  .call-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; padding: 4px 12px 12px; max-height: 260px; overflow-y: auto; }
+  #callPanel.big .call-grid { flex: 1; max-height: none; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); grid-auto-rows: minmax(160px, 1fr); }
+  .tile { position: relative; background: #1f2937; border-radius: 12px; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 2px solid transparent; transition: border-color .15s; }
+  #callPanel.big .tile { aspect-ratio: auto; }
+  .tile.speaking { border-color: #22c55e; }
+  .tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  .tile .avatar { width: 48px; height: 48px; font-size: 18px; }
+  .tile .t-name { position: absolute; left: 6px; right: 6px; bottom: 5px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000; z-index: 1; }
+  .tile .t-mute { position: absolute; top: 5px; right: 6px; font-size: 12px; z-index: 1; }
+  .call-controls { display: flex; justify-content: center; gap: 12px; padding: 10px 12px 14px; }
+  .call-btn { width: 46px; height: 46px; border-radius: 50%; border: 0; background: rgba(255,255,255,.14); color: #fff; font-size: 19px; display: flex; align-items: center; justify-content: center; }
+  .call-btn:hover { background: rgba(255,255,255,.24); }
+  .call-btn.off { background: #fff; color: #111827; }
+  .call-btn.hangup { background: #ef4444; transform: rotate(135deg); }
+  .call-btn.accept { background: #22c55e; }
+  .call-btn.big { width: 64px; height: 64px; font-size: 26px; }
+  #incoming { position: fixed; inset: 0; background: rgba(15,18,25,.6); z-index: 95; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .incoming-card { background: #111827; color: #fff; border-radius: 20px; padding: 28px 32px; text-align: center; width: 100%; max-width: 320px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .incoming-ava .avatar { width: 84px; height: 84px; font-size: 30px; margin: 0 auto 14px; animation: ring 1.4s ease-in-out infinite; }
+  @keyframes ring { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,.5); } 50% { box-shadow: 0 0 0 16px rgba(34,197,94,0); } }
+  .incoming-name { font-size: 20px; font-weight: 600; }
+  .incoming-sub { color: #9ca3af; font-size: 14px; margin-top: 4px; }
+  .incoming-btns { display: flex; justify-content: space-around; margin-top: 26px; }
+
+  @media (max-width: 900px) {
+    .cal-body { flex-direction: column; overflow-y: auto; }
+    .cal-grid-wrap { flex: none; }
+    .cal-grid { grid-auto-rows: 64px; }
+    .day-panel { width: auto; border-left: 0; border-top: 1px solid var(--border); flex: none; }
+    #dayList { overflow: visible; }
+    .chip, .more { display: none; }
+    .dots { display: flex; }
+  }
+  @media (max-width: 720px) {
+    #sidebar { position: fixed; z-index: 50; inset: 0 auto 0 0; transform: translateX(-100%); transition: transform .2s; }
+    #sidebar.open { transform: none; box-shadow: 4px 0 24px rgba(0,0,0,.3); }
+    .menuBtn { display: block; }
+    .cal-nav .month { min-width: 110px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Экран входа -->
+<div id="auth">
+  <form class="auth-card" id="authForm">
+    <div class="brand-big"><img src="icon.svg" alt=""><div><h1>Shtark Link</h1><p>Корпоративный мессенджер Shtark</p></div></div>
+    <div class="tabs">
+      <button type="button" data-mode="login" class="active">Вход</button>
+      <button type="button" data-mode="register">Регистрация</button>
+    </div>
+    <label class="field"><input name="login" placeholder="Логин (латиница)" autocomplete="username" required></label>
+    <label class="field hidden" id="nameField"><input name="name" placeholder="Имя и фамилия"></label>
+    <label class="field"><input name="password" type="password" placeholder="Пароль" autocomplete="current-password" required></label>
+    <label class="field hidden" id="inviteField"><input name="invite" placeholder="Код приглашения от администратора" autocomplete="off"></label>
+    <button class="primary" id="authSubmit">Войти</button>
+    <div class="error" id="authError"></div>
+  </form>
+</div>
+
+<!-- Приложение -->
+<div id="app" class="hidden">
+  <aside id="sidebar">
+    <div class="brand"><img src="icon.svg" alt=""><span><b>Shtark</b> Link</span></div>
+    <div class="me"><span class="dot on"></span><span class="name" id="meName"></span><button class="bell" id="bellBtn" title="Уведомления">🔔</button><button id="logoutBtn">Выйти</button></div>
+    <div class="push-prompt hidden" id="pushPrompt"><span>🔔</span><span><b>Включите уведомления</b>, чтобы не пропускать сообщения и задачи</span></div>
+    <div class="side-scroll">
+      <div class="chat-item nav" id="navCalendar"><span class="ico">📅</span><span class="label">Календарь</span><span id="todayBadge"></span></div>
+      <div class="chat-item nav" id="navTasks"><span class="ico">📋</span><span class="label">Задачи</span><span id="tasksBadge"></span></div>
+      <div class="chat-item nav hidden" id="navAdmin"><span class="ico">⚙️</span><span class="label">Администрирование</span></div>
+      <div class="side-title">Каналы <button id="newChannelBtn" title="Создать канал">+</button></div>
+      <div id="channelList"></div>
+      <div class="side-title">Чаты <button id="newGroupBtn" title="Создать чат">+</button></div>
+      <div id="groupList"></div>
+      <div class="side-title">Сотрудники</div>
+      <div id="userList"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- Переписка -->
+    <section class="view" id="chatView">
+      <div class="header">
+        <button class="menuBtn">☰</button>
+        <h2 id="chatTitle"></h2>
+        <div id="chatActions"></div>
+      </div>
+      <div id="messages"></div>
+      <div id="typing"></div>
+      <div class="composer">
+        <div id="uploads"></div>
+        <div class="input-row">
+          <button class="icon-btn" id="attachBtn" title="Прикрепить файл">📎</button>
+          <textarea id="input" rows="1" placeholder="Сообщение…" title="Enter — отправить, Shift+Enter — новая строка"></textarea>
+          <button class="send-btn" id="sendBtn">Отправить</button>
+        </div>
+        <input type="file" id="fileInput" multiple hidden>
+      </div>
+      <div id="drop" class="hidden">Отпустите, чтобы отправить файлы</div>
+    </section>
+
+    <!-- Календарь -->
+    <section class="view hidden" id="calView">
+      <div class="header">
+        <button class="menuBtn">☰</button>
+        <h2>Календарь</h2>
+        <div class="seg" id="calFilter">
+          <button data-f="all" class="active">Все</button>
+          <button data-f="mine">Мои</button>
+          <button data-f="shared">Общие</button>
+        </div>
+        <div class="cal-nav">
+          <button class="hbtn" id="calPrev" title="Предыдущий месяц">‹</button>
+          <span class="month" id="calMonth"></span>
+          <button class="hbtn" id="calNext" title="Следующий месяц">›</button>
+          <button class="hbtn" id="calToday">Сегодня</button>
+        </div>
+        <button class="hbtn primary-sm" id="calAdd">+ Дело</button>
+      </div>
+      <div class="cal-body">
+        <div class="cal-grid-wrap">
+          <div class="cal-week"><div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div></div>
+          <div class="cal-grid" id="calGrid"></div>
+        </div>
+        <aside class="day-panel">
+          <h3 id="dayTitle"></h3>
+          <div class="count" id="dayCount"></div>
+          <div id="dayList"></div>
+          <button class="primary add" id="dayAdd">+ Добавить дело на этот день</button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Задачи -->
+    <section class="view hidden" id="taskView">
+      <div class="header">
+        <button class="menuBtn">☰</button>
+        <h2>Задачи</h2>
+        <div class="seg" id="taskFilter">
+          <button data-f="mine" class="active">Мне</button>
+          <button data-f="byme">Я поручил</button>
+          <button data-f="all">Все</button>
+        </div>
+        <button class="hbtn primary-sm" id="taskAdd">+ Задача</button>
+      </div>
+      <div class="task-toolbar">
+        <label id="assigneeFilterWrap" class="hidden">Исполнитель: <select id="assigneeFilter"></select></label>
+        <label class="check" style="margin:0"><input type="checkbox" id="showDone"> Показывать выполненные</label>
+      </div>
+      <div class="task-list" id="taskList"></div>
+    </section>
+
+    <!-- Администрирование -->
+    <section class="view hidden" id="adminView">
+      <div class="header">
+        <button class="menuBtn">☰</button>
+        <h2>Администрирование</h2>
+        <button class="hbtn primary-sm" id="adminAdd">+ Добавить сотрудника</button>
+      </div>
+      <div class="admin-body">
+        <div class="admin-card" id="inviteCard"></div>
+        <div class="admin-card">
+          <div class="admin-card-title">Сотрудники <span class="n" id="adminCount"></span></div>
+          <div id="adminUsers"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Звонок -->
+<div id="callPanel" class="hidden">
+  <div class="call-head">
+    <span class="call-dot"></span>
+    <div class="call-title"><b id="callTitle"></b><span id="callTimer">00:00</span></div>
+    <button class="call-icon" id="callExpand" title="Развернуть">⤢</button>
+  </div>
+  <div class="call-grid" id="callGrid"></div>
+  <div class="call-controls">
+    <button class="call-btn" id="callMic" title="Микрофон">🎤</button>
+    <button class="call-btn" id="callCam" title="Камера">📷</button>
+    <button class="call-btn" id="callScreen" title="Показать экран">🖥</button>
+    <button class="call-btn hangup" id="callLeave" title="Завершить">📞</button>
+  </div>
+  <div id="callAudio" hidden></div>
+</div>
+<div id="incoming" class="hidden">
+  <div class="incoming-card">
+    <div class="incoming-ava" id="incomingAva"></div>
+    <div class="incoming-name" id="incomingName"></div>
+    <div class="incoming-sub" id="incomingSub"></div>
+    <div class="incoming-btns">
+      <button class="call-btn hangup big" id="incomingDecline" title="Отклонить">📞</button>
+      <button class="call-btn accept big" id="incomingAccept" title="Принять">📞</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal" class="hidden">
+<div class="modal-card" id="modalCard"></div></div>
+<div id="lightbox" class="hidden"><img alt=""></div>
+<div id="toast"></div>
+
+
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
