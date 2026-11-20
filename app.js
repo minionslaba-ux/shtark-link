@@ -109,7 +109,7 @@ function peoplePicker(exclude = []) {
   if (!list.length) return '<div class="empty" style="margin:12px 0">Некого добавить</div>';
   return `<div class="people">${list.map((u) => `
     <label class="person"><input type="checkbox" value="${u.id}">${avatar(u, 'sm')}
-    <span class="pname">${esc(u.name)}</span><span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></label>`).join('')}</div>`;
+    <span class="pname">${esc(u.name)}${u.position ? `<small class="pos">${esc(u.position)}</small>` : ''}</span><span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></label>`).join('')}</div>`;
 }
 const pickedIds = (root) => [...root.querySelectorAll('.people input:checked')].map((i) => i.value);
 
@@ -120,6 +120,7 @@ document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
   $('#nameField').classList.toggle('hidden', authMode !== 'register');
   $('#inviteField').classList.toggle('hidden', authMode !== 'register');
+  $('#positionField').classList.toggle('hidden', authMode !== 'register');
   $('#authSubmit').textContent = authMode === 'login' ? 'Войти' : 'Зарегистрироваться';
   // подсказка браузеру: при входе — подставить сохранённый пароль, при регистрации — предложить сохранить новый
   $('[name=password]').setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
@@ -134,7 +135,7 @@ $('#authForm').onsubmit = async (e) => {
   $('#authSubmit').disabled = true;
   $('#authError').textContent = '';
   try {
-    if (authMode === 'register') await fn('sl-register', { login, name: f.name, password: f.password, invite: f.invite });
+    if (authMode === 'register') await fn('sl-register', { login, name: f.name, position: f.position, password: f.password, invite: f.invite });
     check(await sb.auth.signInWithPassword({ email: login + EMAIL_DOMAIN, password: f.password }));
     try { localStorage.setItem('lastLogin', login); } catch {}
     await start();
@@ -162,7 +163,7 @@ async function start() {
   }
   state.me = profileFromRow(me);
   const [users, channels, groups, members] = await Promise.all([
-    sb.from('sl_profiles').select('id, login, name, is_admin, disabled'),
+    sb.from('sl_profiles').select('id, login, name, position, is_admin, disabled'),
     sb.from('sl_channels').select('id, name').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
@@ -203,8 +204,9 @@ async function start() {
   setInterval(checkReminders, 30000);
 }
 
+const posOf = (id) => state.users.get(id)?.position || '';
 function profileFromRow(u) {
-  return { id: u.id, login: u.login, name: u.name, isAdmin: !!u.is_admin, disabled: !!u.disabled };
+  return { id: u.id, login: u.login, name: u.name, position: u.position || '', isAdmin: !!u.is_admin, disabled: !!u.disabled };
 }
 
 // «Я в приложении» + проверка, что доступ не отключили
@@ -349,6 +351,30 @@ async function onGroupMemberChange(p) {
   if (state.view === 'chat' && state.current?.startsWith('g:')) renderChatHeader();
 }
 
+// Звук входящего сообщения (короткий «дзынь»). Браузер разрешает звук после первого касания/клика.
+let pingCtx = null;
+function soundOn() { try { return localStorage.getItem('sl-sound') !== '0'; } catch { return true; } }
+function unlockPing() {
+  try {
+    if (!pingCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) pingCtx = new AC(); }
+    pingCtx?.resume?.();
+  } catch {}
+}
+['pointerdown', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, unlockPing, { passive: true }));
+function playPing(soft = false) {
+  if (!soundOn() || !pingCtx || call.room) return; // во время звонка не мешаем
+  try {
+    const t = pingCtx.currentTime + 0.02, vol = soft ? 0.05 : 0.14;
+    [[880, 0], [1320, 0.11]].forEach(([f, d]) => {
+      const o = pingCtx.createOscillator(), g = pingCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t + d); g.gain.linearRampToValueAtTime(vol, t + d + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.28);
+      o.connect(g).connect(pingCtx.destination); o.start(t + d); o.stop(t + d + 0.3);
+    });
+  } catch {}
+}
+
 function notify(m) {
   updateTitle();
   if (!document.hidden) return;
@@ -381,12 +407,12 @@ const callCount = (chat) => [...state.inCall.values()].filter((c) => c === chat)
 
 function renderSidebar() {
   if (!state.me) return;
-  const item = (chat, label, prefix) => {
+  const item = (chat, label, prefix, sub = '') => {
     const n = state.unread.get(chat) || 0;
     const active = state.view === 'chat' && chat === state.current;
     const live = callCount(chat) ? '<span class="call-ind" title="Идёт звонок">📞</span>' : '';
     return `<div class="chat-item ${active ? 'active' : ''} ${n ? 'unread' : ''}" data-chat="${chat}">
-      ${prefix}<span class="label">${esc(label)}</span>${live}${n ? `<span class="badge">${n}</span>` : ''}</div>`;
+      ${prefix}<span class="label">${esc(label)}${sub ? `<small class="pos">${esc(sub)}</small>` : ''}</span>${live}${n ? `<span class="badge">${n}</span>` : ''}</div>`;
   };
   $('#channelList').innerHTML = state.channels.map((c) => item(`c:${c.id}`, c.name, '<span class="ico">#</span>')).join('');
   const groups = [...state.groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -395,7 +421,7 @@ function renderSidebar() {
     : '<div class="side-hint">Нажмите +, чтобы создать</div>';
   const users = activeUsers().sort((a, b) => (state.online.has(b.id) - state.online.has(a.id)) || a.name.localeCompare(b.name, 'ru'));
   $('#userList').innerHTML = users.map((u) =>
-    item(dmKey(state.me.id, u.id), u.id === state.me.id ? u.name + ' (вы)' : u.name, `<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span>`)
+    item(dmKey(state.me.id, u.id), u.id === state.me.id ? u.name + ' (вы)' : u.name, `<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span>`, u.position)
   ).join('');
   document.querySelectorAll('.chat-item[data-chat]').forEach((el) => el.onclick = () => openChat(el.dataset.chat));
   $('#navCalendar').classList.toggle('active', state.view === 'calendar');
@@ -528,7 +554,7 @@ function renderChatHeader() {
     const [, a, b] = chat.split(':');
     const other = state.users.get(a === state.me.id ? b : a);
     if (other && other.id !== state.me.id) {
-      $('#chatTitle').innerHTML += `<span class="sub">${state.online.has(other.id) ? 'в сети' : 'не в сети'}</span>`;
+      $('#chatTitle').innerHTML += `<span class="sub">${other.position ? esc(other.position) + ' · ' : ''}${state.online.has(other.id) ? 'в сети' : 'не в сети'}</span>`;
       actions = `<button class="hbtn" id="assignBtn" data-uid="${other.id}">📋 Поручить задачу</button>`;
     }
   }
@@ -558,6 +584,7 @@ function onMessage(m) {
   if (list && !list.some((x) => x.id === m.id)) list.push(m);
   const visible = state.view === 'chat' && m.chat === state.current;
   if (visible) { appendMessage(m); clearTyping(m.userId); }
+  if (m.userId !== state.me.id && !m.system) playPing(visible && !document.hidden); // в открытом чате — тише
   if (m.userId !== state.me.id && !m.system && (!visible || document.hidden)) {
     if (!visible) state.unread.set(m.chat, (state.unread.get(m.chat) || 0) + 1);
     notify(m);
@@ -618,7 +645,7 @@ function messageHtml(m, prev) {
     `<div class="msg ${cont ? 'cont' : ''} ${m.userId === state.me.id ? 'mine' : ''}" data-id="${m.id}">
       ${avatar(u)}
       <div class="body">
-        <div class="meta"><b>${esc(u.name)}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b><span>${fmtTime(m.createdAt)}</span></div>
+        <div class="meta"><b>${esc(u.name)}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b>${u.position ? `<span class="pos">${esc(u.position)}</span>` : ''}<span>${fmtTime(m.createdAt)}</span></div>
         ${m.text ? `<div class="text">${linkify(m.text)}</div>` : ''}
         ${file}
       </div></div>`;
@@ -1356,7 +1383,7 @@ function openTaskForm(t = {}) {
       <label class="field"><span>Что нужно сделать</span><input id="tTitle" maxlength="200" value="${esc(t.title || '')}" placeholder="например, Подготовить коммерческое предложение"></label>
       <label class="field"><span>Исполнитель</span><select id="tAssignee">
         <option value="">— выберите сотрудника —</option>
-        ${users.map((u) => `<option value="${u.id}" ${u.id === t.assigneeId ? 'selected' : ''}>${esc(u.name)}${u.id === state.me.id ? ' (я)' : ''}</option>`).join('')}
+        ${users.map((u) => `<option value="${u.id}" ${u.id === t.assigneeId ? 'selected' : ''}>${esc(u.name)}${u.position ? ' — ' + esc(u.position) : ''}${u.id === state.me.id ? ' (я)' : ''}</option>`).join('')}
       </select></label>
       <div class="row">
         <label class="field"><span>Срок</span><input id="tDate" type="date" value="${t.dueDate || ymd(tomorrow)}"></label>
@@ -1441,12 +1468,13 @@ async function renderAdmin() {
         <div class="u-name">${esc(u.name)}${u.id === state.me.id ? ' (вы)' : ''}
           ${u.is_admin ? '<span class="tag shared">администратор</span>' : ''}
           ${u.disabled ? '<span class="tag" style="background:#fee2e2;color:#b91c1c">отключён</span>' : ''}</div>
-        <div class="u-meta">логин: <b>${esc(u.login)}</b> · ${u.disabled ? 'доступ закрыт' : seen(u)}</div>
+        <div class="u-meta">${u.position ? `<b>${esc(u.position)}</b> · ` : '<span style="color:#d97706">должность не указана</span> · '}логин: <b>${esc(u.login)}</b> · ${u.disabled ? 'доступ закрыт' : seen(u)}</div>
       </div>
       <div class="u-actions">
         ${u.disabled
           ? '<button data-act="enable">Вернуть доступ</button>'
-          : `<button data-act="password">Новый пароль</button>
+          : `<button data-act="profile">Изменить</button>
+             <button data-act="password">Новый пароль</button>
              ${u.id !== state.me.id ? `<button data-act="admin">${u.is_admin ? 'Снять админа' : 'Сделать админом'}</button>
              <button data-act="disable" class="warn">Отключить</button>` : ''}`}
       </div>
@@ -1494,6 +1522,7 @@ $('#adminAdd').onclick = () => openModal(`
   <h3>Новый сотрудник</h3>
   <div class="modal-body">
     <label class="field"><span>Имя и фамилия</span><input id="aName" maxlength="64" placeholder="Анна Петрова"></label>
+    <label class="field"><span>Должность</span><input id="aPos" maxlength="60" placeholder="например, Менеджер по продажам"></label>
     <label class="field"><span>Логин для входа (латиница)</span><input id="aLogin" maxlength="32" placeholder="petrova"></label>
     <label class="field"><span>Пароль</span><input id="aPass" value="${genPassword()}"></label>
     <label class="check"><input type="checkbox" id="aAdmin"> Администратор</label>
@@ -1514,7 +1543,7 @@ $('#adminAdd').onclick = () => openModal(`
     root.querySelector('#aOk').onclick = async () => {
       const login = root.querySelector('#aLogin').value.trim().toLowerCase(), password = root.querySelector('#aPass').value;
       try {
-        await fn('sl-admin', { action: 'create', login, name: root.querySelector('#aName').value, password, isAdmin: root.querySelector('#aAdmin').checked });
+        await fn('sl-admin', { action: 'create', login, name: root.querySelector('#aName').value, position: root.querySelector('#aPos').value, password, isAdmin: root.querySelector('#aAdmin').checked });
         renderAdmin();
         showCredentials('Сотрудник добавлен', login, password);
       } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
@@ -1533,6 +1562,23 @@ async function adminAction(id, act) {
       toast(`${u.name}: доступ возвращён. Сотрудника нужно заново добавить в групповые чаты.`);
     } else if (act === 'admin') {
       await fn('sl-admin', { action: 'admin', id, isAdmin: !u.is_admin });
+    } else if (act === 'profile') {
+      return openModal(`<h3>Сотрудник</h3>
+        <div class="modal-body">
+          <label class="field"><span>Имя и фамилия</span><input id="pName" maxlength="64" value="${esc(u.name)}"></label>
+          <label class="field"><span>Должность</span><input id="pPos" maxlength="60" value="${esc(u.position || '')}" placeholder="например, Бухгалтер"></label>
+          <div class="modal-err" id="mErr"></div>
+        </div>
+        <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pOk">Сохранить</button></div>`,
+        (root) => {
+          root.querySelector('[data-close]').onclick = closeModal;
+          root.querySelector('#pOk').onclick = async () => {
+            try {
+              await fn('sl-admin', { action: 'profile', id, name: root.querySelector('#pName').value, position: root.querySelector('#pPos').value });
+              closeModal(); renderAdmin(); toast('Сохранено');
+            } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+          };
+        });
     } else if (act === 'password') {
       const password = genPassword();
       if (!confirm(`Задать «${u.name}» новый пароль? Старый перестанет работать.`)) return;
@@ -1672,7 +1718,23 @@ async function rejoinViaRelay(chat) {
   call.room = null; // чтобы Disconnected не закрыл окно звонка
   await room.disconnect().catch(() => {});
   cleanupCall({ keepUi: true, keepCtx: true });
-  await joinCall(chat, { relay: true, rejoin: true, audioCtx: ctx });
+  await joinCall(chat, { relay: true, rejoin: true, audioCtx: ctx, blessed: blessAudioElement() });
+}
+
+// Safari (все браузеры iPhone) — звук собеседника через <audio>, а не через Web Audio
+function webkitAudioPath() {
+  try { if (localStorage.getItem('sl-audio-path') === 'element') return true; } catch {}
+  return isIOS || /^((?!chrome|chromium|crios|android|edg|fxios).)*safari/i.test(navigator.userAgent);
+}
+// «Освящаем» аудиоэлемент тихим звуком в момент нажатия — потом iOS разрешит ему играть голос
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+function blessAudioElement() {
+  const a = document.createElement('audio');
+  a.autoplay = true; a.playsInline = true; a.setAttribute('playsinline', '');
+  a.src = SILENT_WAV;
+  $('#callAudio').appendChild(a);
+  a.play?.().catch(() => {});
+  return a;
 }
 
 async function joinCall(chat, opts = {}) {
@@ -1681,7 +1743,9 @@ async function joinCall(chat, opts = {}) {
   const micPromise = requestMic();
   micPromise.catch(() => {});
   // iPhone разрешает звук, только если его «включили» прямо в момент нажатия — делаем это сразу
-  const audioCtx = opts.audioCtx || unlockAudio();
+  const audioCtx = opts.audioCtx || unlockAudio(); // для гудков и (не на iPhone) для звука собеседников
+  // На iPhone/Safari звук собеседника играет обычный <audio>, «разрешённый» прямо в момент нажатия
+  const blessed = webkitAudioPath() ? (opts.blessed || blessAudioElement()) : null;
   const relay = opts.relay || relayPreferred();
   if (call.chat) {
     if (!confirm('Вы уже в звонке. Завершить его и перейти в новый?')) {
@@ -1698,10 +1762,11 @@ async function joinCall(chat, opts = {}) {
     const room = new LK.Room({
       adaptiveStream: true, dynacast: true,
       audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true },
-      webAudioMix: audioCtx ? { audioContext: audioCtx } : false, // звук собеседников идёт через уже разблокированный AudioContext
+      // Web Audio — только не в Safari: на iPhone звонок через него молчит
+      webAudioMix: audioCtx && !blessed ? { audioContext: audioCtx } : false,
     });
     call.chat = chat; call.room = room; call.started = Date.now(); call.mic = true; call.micError = null; call.cam = false; call.screen = false;
-    call.audioCtx = audioCtx; call.loud = false; call.relay = relay;
+    call.audioCtx = audioCtx; call.loud = false; call.relay = relay; call.blessed = blessed; call.blessedUsed = false;
     if (!opts.rejoin) call.log = [];
     callLog(relay ? 'join-relay' : 'join');
     room
@@ -1716,7 +1781,14 @@ async function joinCall(chat, opts = {}) {
       .on(LK.RoomEvent.Disconnected, (r) => callLog('disconnected', r));
     room
       .on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-        if (track.kind === 'audio') { $('#callAudio').appendChild(track.attach()); applyVolume(participant); }
+        if (track.kind === 'audio') {
+          let el;
+          if (call.blessed && !call.blessedUsed) { el = track.attach(call.blessed); call.blessedUsed = true; }
+          else { el = track.attach(); el.setAttribute('playsinline', ''); $('#callAudio').appendChild(el); }
+          el.muted = false;
+          el.play?.().catch(() => $('#callSound').classList.remove('hidden')); // не дали играть — покажем кнопку
+          applyVolume(participant);
+        }
         renderCall();
       })
       .on(LK.RoomEvent.TrackUnsubscribed, (track) => { track.detach().forEach((el) => el.remove()); renderCall(); })
@@ -1933,10 +2005,14 @@ $('#callSpeaker').onclick = async () => {
       if (target) await room.switchActiveDevice('audiooutput', target.deviceId);
     }
   } catch {}
-  // 2) громкость собеседников (на iPhone — главный способ)
+  // 2) громкость собеседников (усиление выше 100% — только через Web Audio, т.е. не в Safari)
   for (const p of room.remoteParticipants.values()) applyVolume(p);
   renderCall();
-  toast(call.loud ? '🔊 Громкая связь включена' : 'Громкая связь выключена');
+  if (call.blessed && isIOS) {
+    toast(call.loud
+      ? '🔊 На iPhone сайт не может сам переключить динамик. Если звук тихий — нажмите кнопки громкости или выберите «Динамик» в Пункте управления (значок AirPlay).'
+      : 'Громкая связь выключена');
+  } else toast(call.loud ? '🔊 Громкая связь включена' : 'Громкая связь выключена');
 };
 window.addEventListener('beforeunload', () => { call.room?.disconnect(); });
 
@@ -2126,11 +2202,14 @@ function openPushSettings() {
     actions = `<span class="spacer"></span><button class="primary" id="pOn">Включить уведомления</button>`;
   }
   openModal(`<h3>🔔 Уведомления</h3>
-    <div class="modal-body">${status}${body}<div class="modal-err" id="mErr"></div></div>
+    <div class="modal-body">${status}${body}
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="pSound" ${soundOn() ? 'checked' : ''}> Звук входящих сообщений, пока Shtark Link открыт</label>
+      <div class="modal-err" id="mErr"></div></div>
     <div class="modal-foot">${actions || '<span class="spacer"></span>'}<button class="secondary" data-close>Закрыть</button></div>`,
     (root) => {
       const err = (e) => root.querySelector('#mErr').textContent = humanError(e);
       root.querySelector('[data-close]').onclick = closeModal;
+      root.querySelector('#pSound').onchange = (e) => { try { localStorage.setItem('sl-sound', e.target.checked ? '1' : '0'); } catch {} if (e.target.checked) { unlockPing(); playPing(); } };
       const on = root.querySelector('#pOn');
       if (on) on.onclick = async () => { on.disabled = true; try { await enablePush(); openPushSettings(); toast('🔔 Уведомления включены'); } catch (e) { err(e); on.disabled = false; } };
       const off = root.querySelector('#pOff');

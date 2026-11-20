@@ -22,6 +22,7 @@ Deno.serve(async (req) => {
     const b = await req.json().catch(() => ({}));
     const login = String(b.login || '').trim().toLowerCase();
     const name = String(b.name || '').trim();
+    const position = String(b.position || '').trim().slice(0, 60);
     const password = String(b.password || '');
     const invite = String(b.invite || '').trim().toUpperCase();
     if (!/^[a-z0-9._-]{2,32}$/.test(login)) return json({ error: 'Логин: 2–32 символа, латиница, цифры, точка, дефис' }, 400);
@@ -45,7 +46,7 @@ Deno.serve(async (req) => {
       return json({ error: msg }, 400);
     }
     const { count } = await db.from('sl_profiles').select('id', { count: 'exact', head: true });
-    const { error: pe } = await db.from('sl_profiles').insert({ id: created.user.id, login, name, is_admin: (count || 0) === 0 });
+    const { error: pe } = await db.from('sl_profiles').insert({ id: created.user.id, login, name, position, is_admin: (count || 0) === 0 });
     if (pe) {
       await db.auth.admin.deleteUser(created.user.id);
       return json({ error: 'Не удалось создать профиль: ' + pe.message }, 500);

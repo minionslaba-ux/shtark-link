@@ -2,7 +2,8 @@
 // Только для сотрудников с is_admin. Действия:
 //   list — список сотрудников; create { login, name, password, isAdmin } — добавить;
 //   disable { id } — отключить (доступ закрыт, история сохраняется); enable { id } — вернуть доступ;
-//   password { id, password } — новый пароль; admin { id, isAdmin } — права администратора.
+//   password { id, password } — новый пароль; admin { id, isAdmin } — права администратора;
+//   profile { id, name, position } — изменить имя и должность.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const cors = {
@@ -43,12 +44,13 @@ Deno.serve(async (req) => {
     switch (b.action) {
       case 'list': {
         const { data } = await db.from('sl_profiles')
-          .select('id, login, name, is_admin, disabled, last_active, created_at').order('disabled').order('name');
+          .select('id, login, name, position, is_admin, disabled, last_active, created_at').order('disabled').order('name');
         return json({ users: data || [] });
       }
       case 'create': {
         const login = String(b.login || '').trim().toLowerCase();
         const name = String(b.name || '').trim();
+        const position = String(b.position || '').trim().slice(0, 60);
         const password = String(b.password || '');
         if (!/^[a-z0-9._-]{2,32}$/.test(login)) return json({ error: 'Логин: 2–32 символа, латиница, цифры, точка, дефис' }, 400);
         if (!name || name.length > 64) return json({ error: 'Укажите имя и фамилию' }, 400);
@@ -59,7 +61,7 @@ Deno.serve(async (req) => {
           email: emailFor(login), password, email_confirm: true, user_metadata: { app: 'shtark-link', name },
         });
         if (error || !created.user) return json({ error: 'Не удалось создать: ' + (error?.message || '') }, 400);
-        const { error: pe } = await db.from('sl_profiles').insert({ id: created.user.id, login, name, is_admin: !!b.isAdmin });
+        const { error: pe } = await db.from('sl_profiles').insert({ id: created.user.id, login, name, position, is_admin: !!b.isAdmin });
         if (pe) { await db.auth.admin.deleteUser(created.user.id); return json({ error: pe.message }, 500); }
         return json({ ok: true, id: created.user.id });
       }
@@ -81,6 +83,12 @@ Deno.serve(async (req) => {
         const password = String(b.password || '');
         if (password.length < 6) return json({ error: 'Пароль — минимум 6 символов' }, 400);
         const { error } = await db.auth.admin.updateUserById(id, { password });
+        return error ? json({ error: error.message }, 400) : json({ ok: true });
+      }
+      case 'profile': {
+        const name = String(b.name || '').trim(), position = String(b.position || '').trim().slice(0, 60);
+        if (!name || name.length > 64) return json({ error: 'Укажите имя и фамилию' }, 400);
+        const { error } = await db.from('sl_profiles').update({ name, position }).eq('id', id);
         return error ? json({ error: error.message }, 400) : json({ ok: true });
       }
       case 'admin': {
