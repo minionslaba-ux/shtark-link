@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Shtark Link</title>
 <meta name="description" content="Корпоративный мессенджер компании Shtark">
 <meta name="theme-color" content="#1f2430">
@@ -350,6 +350,46 @@
     .menuBtn { display: block; }
     .cal-nav .month { min-width: 110px; }
   }
+
+  /* Аватарки, удаление сообщений */
+  .avatar { overflow: hidden; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .avatar.xl { width: 84px; height: 84px; font-size: 30px; }
+  .ava-edit { display: flex; align-items: center; gap: 16px; margin: 6px 0 14px; }
+  .sava { position: relative; display: inline-flex; flex-shrink: 0; }
+  .sava .avatar.sm { width: 26px; height: 26px; font-size: 11px; }
+  .sava .dot { position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border: 2px solid var(--side); box-sizing: content-box; }
+  .msg .body { position: relative; }
+  .msg-del { position: absolute; top: -10px; right: -6px; border: 1px solid var(--border); background: #fff; border-radius: 50%; width: 26px; height: 26px; font-size: 13px; line-height: 1; padding: 0; display: none; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .msg.mine .msg-del { right: auto; left: -6px; }
+  .msg:hover .msg-del { display: block; }
+  @media (hover: none) { .msg.sel .msg-del { display: block; } }
+
+  /* Телефоны любых размеров */
+  html, body { height: 100%; height: 100dvh; }
+  #app, #auth { height: 100%; height: 100dvh; }
+  @media (max-width: 720px) {
+    input, textarea, select, .field input, .field textarea { font-size: 16px; } /* iOS не приближает экран при вводе */
+    .header { min-height: 52px; padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top)); gap: 6px; flex-wrap: nowrap; }
+    .header h2 { min-width: 0; font-size: 16px; }
+    .header .sub { display: block; margin-left: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+    .hbtn { padding: 7px 10px; white-space: nowrap; }
+    .hbtn .lbl { display: none; }
+    #messages { padding: 8px 10px 12px; }
+    .msg .body { max-width: 85%; }
+    .msg .avatar { width: 30px; height: 30px; font-size: 12px; }
+    .composer { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+    .send-btn { padding: 8px 12px; }
+    #sidebar { width: min(300px, 86vw); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    #modal { align-items: flex-end; padding: 0; }
+    .modal-card, .modal-card.wide { max-width: none; border-radius: 16px 16px 0 0; max-height: 92dvh; padding-bottom: env(safe-area-inset-bottom); }
+    .img-preview { max-width: 100%; }
+  }
+  @media (max-width: 360px) {
+    html, body { font-size: 14px; }
+    .msg .body { max-width: 88%; }
+    .msg .avatar { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -376,7 +416,7 @@
 <div id="app" class="hidden">
   <aside id="sidebar">
     <div class="brand"><img src="icon.svg" alt=""><span><b>Shtark</b> Link</span></div>
-    <div class="me"><span class="dot on"></span><span class="name" id="meName"></span><button class="bell" id="bellBtn" title="Уведомления">🔔</button><button id="logoutBtn">Выйти</button></div>
+    <div class="me"><span class="dot on"></span><span class="name" id="meName" title="Мой профиль и фото" style="cursor:pointer"></span><button class="bell" id="bellBtn" title="Уведомления">🔔</button><button id="logoutBtn">Выйти</button></div>
     <div class="push-prompt hidden" id="pushPrompt"><span>🔔</span><span><b>Включите уведомления</b>, чтобы не пропускать сообщения и задачи</span></div>
     <div class="side-scroll">
       <div class="chat-item nav" id="navCalendar"><span class="ico">📅</span><span class="label">Календарь</span><span id="todayBadge"></span></div>
@@ -518,8 +558,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611201930"></script>
-<script src="config.js?v=202611201930"></script>
-<script src="app.js?v=202611201930"></script>
+<script src="vendor/supabase.js?v=202611202130"></script>
+<script src="config.js?v=202611202130"></script>
+<script src="app.js?v=202611202130"></script>
 </body>
 </html>

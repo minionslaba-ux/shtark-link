@@ -40,7 +40,8 @@ async function vapid() {
     pub = await setting('vapid_pub'); priv = await setting('vapid_priv'); // если две функции создали ключи одновременно
   }
   vapidCache = { pub: pub!, priv: priv! };
-  webpush.setVapidDetails('mailto:noreply@shtark-link.invalid', vapidCache.pub, vapidCache.priv);
+  // Apple принимает только настоящий адрес (https или mailto) — указываем сайт приложения
+  webpush.setVapidDetails('https://minionslaba-ux.github.io/shtark-link/', vapidCache.pub, vapidCache.priv);
   return vapidCache;
 }
 
@@ -66,13 +67,20 @@ async function send(userIds: string[], p: Payload, { force = false } = {}) {
   const body = JSON.stringify({ icon: '/icon-192.png', badge: '/icon-192.png', ...p });
   let sent = 0;
   await Promise.all((subs || []).map(async (s: { endpoint: string; p256dh: string; auth: string }) => {
+    // результат доставки сохраняем у подписки — по нему видно, принял ли Apple/Google уведомление
+    const mark = (status: number, error: string | null) =>
+      db.from('sl_push_subs').update({ last_status: status, last_error: error, last_at: new Date().toISOString() }).eq('endpoint', s.endpoint);
     try {
-      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body,
+      const r = await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body,
         { TTL: p.ttl ?? 86400, urgency: (p.urgency as 'normal') || 'normal' });
       sent++;
+      await mark(r.statusCode, null);
     } catch (e) {
-      const code = (e as { statusCode?: number }).statusCode;
+      const err = e as { statusCode?: number; body?: string; message?: string };
+      const code = err.statusCode || 0;
+      console.log('push failed', code, String(err.body || err.message || '').slice(0, 300), s.endpoint.slice(0, 60));
       if (code === 404 || code === 410) await db.from('sl_push_subs').delete().eq('endpoint', s.endpoint);
+      else await mark(code, String(err.body || err.message || '').slice(0, 300));
     }
   }));
   return sent;

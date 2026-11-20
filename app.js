@@ -35,7 +35,12 @@ const colors = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899'
 const hash = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); };
 const userColor = (id) => colors[hash(id) % colors.length];
 const initials = (n) => String(n || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
-const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="background:${userColor(u.id)}">${esc(initials(u.name))}</span>`;
+const avatar = (u, cls = '') => {
+  const url = u.avatar || (typeof state !== 'undefined' && state.users.get(u.id)?.avatar);
+  return url
+    ? `<span class="avatar ${cls}"><img src="${esc(url)}" alt="" loading="lazy"></span>`
+    : `<span class="avatar ${cls}" style="background:${userColor(u.id)}">${esc(initials(u.name))}</span>`;
+};
 const dmKey = (a, b) => (a < b ? `d:${a}:${b}` : `d:${b}:${a}`);
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -151,6 +156,74 @@ async function logout() {
 }
 $('#logoutBtn').onclick = logout;
 
+// ---------- Мой профиль и аватарки ----------
+function avatarEditorHtml(u) {
+  return `<div class="ava-edit">${avatar(u, 'xl')}
+    <div><button class="secondary" type="button" id="avaPick">📷 Загрузить фото</button>
+    ${u.avatar ? '<button class="danger" type="button" id="avaDel">Убрать</button>' : ''}
+    <input type="file" id="avaFile" accept="image/*" hidden><div class="muted" id="avaMsg" style="font-size:13px;margin-top:4px"></div></div></div>`;
+}
+function mountAvatarEditor(root, uid) {
+  const pick = root.querySelector('#avaPick'), file = root.querySelector('#avaFile'), msg = root.querySelector('#avaMsg');
+  const refresh = (url) => {
+    const u = state.users.get(uid);
+    if (u) u.avatar = url;
+    if (uid === state.me.id) state.me.avatar = url;
+    root.querySelector('.ava-edit .avatar').outerHTML = avatar({ ...(u || { id: uid, name: '?' }), avatar: url }, 'xl');
+    renderSidebar(); if (state.view === 'chat') renderMessages(false);
+  };
+  pick.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files[0];
+    if (!f) return;
+    msg.textContent = 'Загрузка…';
+    try {
+      const blob = await squareJpeg(f, 256);
+      const path = `${uid}/${crypto.randomUUID()}.jpg`;
+      const up = await sb.storage.from('sl-avatars').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+      if (up.error) throw up.error;
+      const url = sb.storage.from('sl-avatars').getPublicUrl(path).data.publicUrl;
+      check(await sb.rpc('sl_set_avatar', { p_user: uid, p_url: url }));
+      msg.textContent = 'Фото сохранено';
+      refresh(url);
+    } catch (e) { msg.textContent = humanError(e); }
+  };
+  const del = root.querySelector('#avaDel');
+  if (del) del.onclick = async () => {
+    try { check(await sb.rpc('sl_set_avatar', { p_user: uid, p_url: '' })); refresh(''); del.remove(); msg.textContent = 'Фото убрано'; }
+    catch (e) { msg.textContent = humanError(e); }
+  };
+}
+// Обрезка по центру до квадрата и уменьшение — аватарка весит ~20 КБ
+function squareJpeg(file, size) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const s = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement('canvas'); c.width = c.height = size;
+      c.getContext('2d').drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error('Не удалось обработать фото'))), 'image/jpeg', 0.85);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Это не похоже на фото')); };
+    img.src = url;
+  });
+}
+function openMyProfile() {
+  const me = state.users.get(state.me.id) || state.me;
+  openModal(`<h3>Мой профиль</h3>
+    <div class="modal-body">
+      ${avatarEditorHtml(me)}
+      <div class="td-row"><span>Имя</span><span>${esc(me.name)}</span></div>
+      ${me.position ? `<div class="td-row"><span>Должность</span><span>${esc(me.position)}</span></div>` : ''}
+      <div class="td-row"><span>Логин</span><span>${esc(me.login || '')}</span></div>
+      <p class="muted" style="font-size:13px">Имя и должность меняет администратор.</p>
+    </div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Готово</button></div>`,
+  (root) => { root.querySelector('[data-close]').onclick = closeModal; mountAvatarEditor(root, me.id); });
+}
+$('#meName').onclick = openMyProfile;
+
 // ---------- Старт ----------
 async function start() {
   const { data: { user } } = await sb.auth.getUser();
@@ -163,7 +236,7 @@ async function start() {
   }
   state.me = profileFromRow(me);
   const [users, channels, groups, members] = await Promise.all([
-    sb.from('sl_profiles').select('id, login, name, position, is_admin, disabled'),
+    sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled'),
     sb.from('sl_channels').select('id, name').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
@@ -206,7 +279,7 @@ async function start() {
 
 const posOf = (id) => state.users.get(id)?.position || '';
 function profileFromRow(u) {
-  return { id: u.id, login: u.login, name: u.name, position: u.position || '', isAdmin: !!u.is_admin, disabled: !!u.disabled };
+  return { id: u.id, login: u.login, name: u.name, position: u.position || '', avatar: u.avatar_url || '', isAdmin: !!u.is_admin, disabled: !!u.disabled };
 }
 
 // «Я в приложении» + проверка, что доступ не отключили
@@ -233,6 +306,7 @@ function connectRealtime() {
   let firstDb = true;
   state.db = sb.channel('sl-db')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sl_messages' }, (p) => onMessage(msgFromRow(p.new)))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'sl_messages' }, (p) => p.old?.id && onMessageDeleted(p.old.id))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_profiles' }, onProfileChange)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sl_channels' }, (p) => {
       if (!state.channels.some((c) => c.id === p.new.id)) state.channels.push({ id: p.new.id, name: p.new.name });
@@ -421,7 +495,7 @@ function renderSidebar() {
     : '<div class="side-hint">Нажмите +, чтобы создать</div>';
   const users = activeUsers().sort((a, b) => (state.online.has(b.id) - state.online.has(a.id)) || a.name.localeCompare(b.name, 'ru'));
   $('#userList').innerHTML = users.map((u) =>
-    item(dmKey(state.me.id, u.id), u.id === state.me.id ? u.name + ' (вы)' : u.name, `<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span>`, u.position)
+    item(dmKey(state.me.id, u.id), u.id === state.me.id ? u.name + ' (вы)' : u.name, `<span class="sava">${avatar(u, 'sm')}<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></span>`, u.position)
   ).join('');
   document.querySelectorAll('.chat-item[data-chat]').forEach((el) => el.onclick = () => openChat(el.dataset.chat));
   $('#navCalendar').classList.toggle('active', state.view === 'calendar');
@@ -545,8 +619,8 @@ function renderChatHeader() {
   let actions = '';
   const n = callCount(chat);
   const callBtn = call.chat === chat ? ''
-    : n ? `<button class="hbtn" id="callBtn" style="border-color:#22c55e;color:#16a34a">📞 Присоединиться (${n})</button>`
-    : `<button class="hbtn" id="callBtn" title="Голосовой звонок">📞 ${chat.startsWith('d:') ? 'Позвонить' : 'Созвон'}</button>`;
+    : n ? `<button class="hbtn" id="callBtn" style="border-color:#22c55e;color:#16a34a">📞 <span class="lbl">Присоединиться</span> (${n})</button>`
+    : `<button class="hbtn" id="callBtn" title="Голосовой звонок">📞 <span class="lbl">${chat.startsWith('d:') ? 'Позвонить' : 'Созвон'}</span></button>`;
   if (chat.startsWith('g:')) {
     const g = state.groups.get(Number(chat.slice(2)));
     if (g) actions = `<button class="hbtn" id="groupBtn">👥 ${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')}</button>`;
@@ -555,7 +629,7 @@ function renderChatHeader() {
     const other = state.users.get(a === state.me.id ? b : a);
     if (other && other.id !== state.me.id) {
       $('#chatTitle').innerHTML += `<span class="sub">${other.position ? esc(other.position) + ' · ' : ''}${state.online.has(other.id) ? 'в сети' : 'не в сети'}</span>`;
-      actions = `<button class="hbtn" id="assignBtn" data-uid="${other.id}">📋 Поручить задачу</button>`;
+      actions = `<button class="hbtn" id="assignBtn" data-uid="${other.id}" title="Поручить задачу">📋 <span class="lbl">Поручить задачу</span></button>`;
     }
   }
   const self = chat.startsWith('d:') && chat.split(':')[1] === chat.split(':')[2];
@@ -589,6 +663,31 @@ function onMessage(m) {
     if (!visible) state.unread.set(m.chat, (state.unread.get(m.chat) || 0) + 1);
     notify(m);
     renderSidebar();
+  }
+}
+
+// Удаление сообщения: своё — автор, любое — администратор
+async function deleteMessage(id) {
+  const m = (state.messages.get(state.current) || []).find((x) => x.id === id);
+  if (!m || !confirm('Удалить сообщение у всех?')) return;
+  try {
+    const { data, error } = await sb.from('sl_messages').delete().eq('id', id).select('id');
+    if (error) throw error;
+    if (!data?.length) return toast('Не удалось удалить сообщение');
+    if (m.file?.path && m.userId === state.me.id) sb.storage.from('sl-files').remove([m.file.path]).catch(() => {});
+    onMessageDeleted(id);
+  } catch (e) { toast(humanError(e)); }
+}
+function onMessageDeleted(id) {
+  for (const [chat, list] of state.messages) {
+    const i = list.findIndex((x) => x.id === id);
+    if (i < 0) continue;
+    list.splice(i, 1);
+    if (state.view === 'chat' && state.current === chat) {
+      const box = $('#messages'), top = box.scrollTop;
+      renderMessages(false);
+      box.scrollTop = top;
+    }
   }
 }
 
@@ -646,6 +745,7 @@ function messageHtml(m, prev) {
       ${avatar(u)}
       <div class="body">
         <div class="meta"><b>${esc(u.name)}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b>${u.position ? `<span class="pos">${esc(u.position)}</span>` : ''}<span>${fmtTime(m.createdAt)}</span></div>
+        ${m.userId === state.me.id || state.me.isAdmin ? '<button class="msg-del" title="Удалить сообщение">🗑</button>' : ''}
         ${m.text ? `<div class="text">${linkify(m.text)}</div>` : ''}
         ${file}
       </div></div>`;
@@ -714,6 +814,14 @@ $('#messages').addEventListener('scroll', async (e) => {
 });
 
 $('#messages').addEventListener('click', async (e) => {
+  const del = e.target.closest('.msg-del');
+  if (del) return deleteMessage(Number(del.closest('.msg').dataset.id));
+  // на телефоне (нет наведения) нажатие на своё сообщение показывает кнопку удаления
+  const tapped = e.target.closest('.msg');
+  if (tapped && !e.target.closest('a, img')) {
+    document.querySelectorAll('.msg.sel').forEach((x) => x !== tapped && x.classList.remove('sel'));
+    tapped.classList.toggle('sel');
+  }
   const img = e.target.closest('.img-preview');
   if (img && img.src) {
     $('#lightbox img').src = img.src;
@@ -1565,6 +1673,7 @@ async function adminAction(id, act) {
     } else if (act === 'profile') {
       return openModal(`<h3>Сотрудник</h3>
         <div class="modal-body">
+          ${avatarEditorHtml(state.users.get(id) || { id, name: u.name })}
           <label class="field"><span>Имя и фамилия</span><input id="pName" maxlength="64" value="${esc(u.name)}"></label>
           <label class="field"><span>Должность</span><input id="pPos" maxlength="60" value="${esc(u.position || '')}" placeholder="например, Бухгалтер"></label>
           <div class="modal-err" id="mErr"></div>
@@ -1572,6 +1681,7 @@ async function adminAction(id, act) {
         <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pOk">Сохранить</button></div>`,
         (root) => {
           root.querySelector('[data-close]').onclick = closeModal;
+          mountAvatarEditor(root, id);
           root.querySelector('#pOk').onclick = async () => {
             try {
               await fn('sl-admin', { action: 'profile', id, name: root.querySelector('#pName').value, position: root.querySelector('#pPos').value });
