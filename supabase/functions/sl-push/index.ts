@@ -3,7 +3,8 @@
 // 2) Вызовы из приложения (Authorization: Bearer <токен сотрудника>):
 //    { action: 'vapid' } — открытый ключ; 'subscribe' { sub }; 'unsubscribe' { endpoint };
 //    'test' — тестовое уведомление себе; 'ring' { chat } — «входящий звонок» тем, у кого приложение закрыто.
-// Тем, кто сейчас в приложении (last_active < 60 с), push не отправляется — вкладка покажет уведомление сама.
+// Тем, кто сейчас в приложении (last_active < 30 с), push не отправляется — вкладка покажет уведомление сама.
+// Кроме входящих звонков: о них сообщаем всегда.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3.6.7';
 
@@ -54,7 +55,7 @@ async function send(userIds: string[], p: Payload, { force = false } = {}) {
   let ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return 0;
   if (!force) {
-    const since = new Date(Date.now() - 60_000).toISOString();
+    const since = new Date(Date.now() - 30_000).toISOString();
     const { data: active } = await db.from('sl_profiles').select('id').in('id', ids).gt('last_active', since);
     const skip = new Set((active || []).map((a: { id: string }) => a.id));
     ids = ids.filter((id) => !skip.has(id));
@@ -184,7 +185,7 @@ Deno.serve(async (req) => {
         return json({ sent: await send(list.filter((id) => id !== me.id), {
           title: '📞 Входящий звонок', body: title ? `${me.name} начал(а) звонок в «${title}»` : `${me.name} звонит вам`,
           url: `/#chat=${chat}`, tag: `call-${chat}`, ttl: 45, urgency: 'high', requireInteraction: true,
-        }) });
+        }, { force: true }) }); // о звонке сообщаем всегда: телефон мог только что заснуть
       }
     }
     return json({ error: 'Неизвестное действие' }, 400);
