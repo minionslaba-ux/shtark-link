@@ -1739,12 +1739,60 @@ function showMediaError(e, what = 'микрофон') {
 }
 function requestMic() {
   if (!navigator.mediaDevices?.getUserMedia) return Promise.reject(Object.assign(new Error('mediaDevices недоступны'), { name: 'Unsupported' }));
-  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  let saved = null; try { saved = localStorage.getItem('sl-mic'); } catch {}
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(saved ? { deviceId: { ideal: saved } } : {}) } });
 }
 async function publishMic(room, stream) {
   const LK = window.LivekitClient;
   await room.localParticipant.publishTrack(stream.getAudioTracks()[0], { source: LK.Track.Source.Microphone });
 }
+
+// Выбор микрофона (на компьютере их бывает несколько: встроенный, гарнитура, веб-камера)
+async function openMicPicker() {
+  const room = call.room;
+  if (!room) return;
+  const LK = window.LivekitClient;
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput' && d.deviceId);
+  const cur = room.localParticipant.getTrackPublication(LK.Track.Source.Microphone)?.track?.mediaStreamTrack?.getSettings?.().deviceId;
+  openModal(`<h3>Микрофон</h3>
+    <div class="modal-body">
+      <p class="muted">Говорите — у работающего микрофона полоска двигается.</p>
+      ${devs.map((d, i) => `<label class="person"><input type="radio" name="mic" value="${esc(d.deviceId)}" ${d.deviceId === cur ? 'checked' : ''}>
+        <span style="flex:1">${esc(d.label || 'Микрофон ' + (i + 1))}</span><meter min="0" max="1" value="0" data-dev="${esc(d.deviceId)}" style="width:70px"></meter></label>`).join('') || '<p>Микрофоны не найдены</p>'}
+      <div class="modal-err" id="mErr"></div>
+    </div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Готово</button></div>`,
+  (root) => {
+    // индикатор громкости для каждого микрофона
+    const streams = [];
+    let raf = 0;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    devs.forEach(async (d) => {
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: d.deviceId } } });
+        streams.push(st);
+        const an = ctx.createAnalyser(); an.fftSize = 512;
+        ctx.createMediaStreamSource(st).connect(an);
+        const buf = new Uint8Array(an.fftSize), m = root.querySelector(`meter[data-dev="${CSS.escape(d.deviceId)}"]`);
+        const tick = () => { an.getByteTimeDomainData(buf); let v = 0; for (const x of buf) v = Math.max(v, Math.abs(x - 128)); if (m) m.value = Math.min(1, v / 50); raf = requestAnimationFrame(tick); };
+        tick();
+      } catch {}
+    });
+    const stop = () => { cancelAnimationFrame(raf); streams.forEach((st) => st.getTracks().forEach((t) => t.stop())); ctx.close().catch(() => {}); };
+    root.querySelector('[data-close]').onclick = () => { stop(); closeModal(); };
+    root.querySelectorAll('input[name=mic]').forEach((r) => r.onchange = async () => {
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: r.value }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        const pub = call.room?.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
+        if (pub?.track) await pub.track.replaceTrack(st.getAudioTracks()[0]);
+        try { localStorage.setItem('sl-mic', r.value); } catch {}
+        call.micSilentWarned = false; call.micSilent = 0;
+        toast('Микрофон переключён');
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    });
+  });
+}
+$('#callMicPick').onclick = openMicPicker;
 
 // ---------- Диагностика звонка (технические показатели, без звука) ----------
 const deviceId = (() => { try { let d = localStorage.getItem('sl-device'); if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem('sl-device', d); } return d; } catch { return 'nodev'; } })();
@@ -1766,6 +1814,17 @@ async function collectCallDiag() {
   const LK = window.LivekitClient, lp = room.localParticipant;
   const micPub = lp.getTrackPublication(LK.Track.Source.Microphone);
   const micStats = await statsOf(micPub?.track);
+  // Микрофон есть, но система не даёт с него звук (отключён, не тот вход, занят другой программой)
+  const mst = micPub?.track?.mediaStreamTrack;
+  if (mst && call.mic && (mst.muted || mst.readyState === 'ended')) {
+    call.micSilent = (call.micSilent || 0) + 1;
+    if (call.micSilent === 2 && !call.micSilentWarned) {
+      call.micSilentWarned = true;
+      callLog('mic-silent', mst.label);
+      toast(isIOS ? '⚠ Микрофон не передаёт звук. Закройте другие приложения, которые используют микрофон.'
+        : `⚠ Микрофон «${mst.label || 'по умолчанию'}» не передаёт звук — вас не слышно. Нажмите, чтобы выбрать другой.`, isIOS ? null : openMicPicker);
+    }
+  } else call.micSilent = 0;
   let bytesSent = 0, srvLost = null, srvRtt = null;
   micStats?.forEach((s) => {
     if (s.type === 'outbound-rtp') bytesSent += s.bytesSent || 0;
@@ -2042,6 +2101,7 @@ function renderCall() {
   $('#callSpeaker').classList.toggle('off', !!call.loud);
   $('#callSpeaker').textContent = call.loud ? '🔊' : '🔈';
   $('#callMic').textContent = call.mic ? '🎤' : '🔇';
+  $('#callMicPick').classList.toggle('hidden', isIOS || !navigator.mediaDevices?.enumerateDevices);
   $('#callCam').classList.toggle('off', call.cam);
   $('#callScreen').classList.toggle('off', call.screen);
 }
