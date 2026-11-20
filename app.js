@@ -34,6 +34,9 @@ const ACCENTS = [
 ];
 const WALLS = [['dots', 'Точки'], ['plain', 'Однотонная'], ['grid', 'Клетка'], ['waves', 'Волны'], ['shtark', 'Shtark'],
   ['dawn', 'Рассвет'], ['ocean', 'Океан'], ['mint', 'Мята'], ['sand', 'Песок'], ['night', 'Ночь']];
+// подложки-картины (оригинальные изображения в манере импрессионистов)
+const WALLS_ART = [['art-lilies', 'Кувшинки', 'в духе Моне', 'lilies'], ['art-sunrise', 'Восход', 'в духе Моне', 'sunrise'], ['art-poppies', 'Маки', 'в духе Моне', 'poppies'],
+  ['art-starry', 'Звёздная ночь', 'в духе Ван Гога', 'starry'], ['art-sunflowers', 'Подсолнухи', 'в духе Ван Гога', 'sunflowers'], ['art-garden', 'Летний сад', 'в духе Ренуара', 'garden']];
 const prefsDefault = { mode: 'auto', accent: 'blue', wall: 'dots', wallUrl: '' };
 let prefs = (() => { try { return { ...prefsDefault, ...JSON.parse(localStorage.getItem('sl-prefs') || '{}') }; } catch { return { ...prefsDefault }; } })();
 const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -49,9 +52,12 @@ function applyPrefs() {
   const cv = document.getElementById('chatView');
   if (cv) {
     cv.className = cv.className.replace(/\bwall-\S+/g, '').trim();
-    const w = prefs.wall === 'custom' && prefs.wallUrl ? 'custom' : (WALLS.some((x) => x[0] === prefs.wall) ? prefs.wall : 'dots');
-    if (w !== 'dots') cv.classList.add('wall-' + w);
-    cv.style.backgroundImage = w === 'custom' ? `linear-gradient(rgba(0,0,0,.08), rgba(0,0,0,.08)), url("${prefs.wallUrl.replace(/"/g, '')}")` : '';
+    const art = WALLS_ART.find((x) => x[0] === prefs.wall);
+    const w = prefs.wall === 'custom' && prefs.wallUrl ? 'custom' : art ? 'art' : (WALLS.some((x) => x[0] === prefs.wall) ? prefs.wall : 'dots');
+    if (w !== 'dots') cv.classList.add('wall-' + (w === 'art' ? 'custom' : w));
+    const veil = dark ? 'rgba(10,14,25,.45)' : 'rgba(255,255,255,.22)';
+    cv.style.backgroundImage = w === 'custom' ? `linear-gradient(rgba(0,0,0,.08), rgba(0,0,0,.08)), url("${prefs.wallUrl.replace(/"/g, '')}")`
+      : w === 'art' ? `linear-gradient(${veil}, ${veil}), url("walls/${art[3]}.jpg")` : '';
   }
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0d1220' : '#1f2430');
 }
@@ -83,10 +89,14 @@ function openAppearance() {
         ${WALLS.map(([k, t]) => `<div class="ap-wall wall-prev-${k} ${k === 'night' ? 'night' : ''} ${prefs.wall === k ? 'on' : ''}" data-wall="${k}"><span class="bub"></span><span class="bub2"></span>${t}</div>`).join('')}
         <div class="ap-wall custom ${prefs.wall === 'custom' ? 'on' : ''}" data-wall="custom" style="${prefs.wallUrl ? `background:url('${esc(prefs.wallUrl)}') center/cover` : 'background:linear-gradient(135deg,#94a3b8,#475569)'}"><span class="bub"></span>${prefs.wallUrl ? 'Своё фото' : '📷 Своё фото'}</div>
       </div>
+      <div class="disc-title">Картины в духе импрессионистов</div>
+      <div class="ap-walls art">
+        ${WALLS_ART.map(([k, t, who, f]) => `<div class="ap-wall art ${prefs.wall === k ? 'on' : ''}" data-wall="${k}" style="background:url('walls/${f}-thumb.jpg') center/cover"><span>${t}<small>${who}</small></span></div>`).join('')}
+      </div>
       <input type="file" id="apFile" accept="image/*" hidden>
       <div class="muted" id="apMsg">Настройки сохраняются в вашем профиле и действуют на всех ваших устройствах.</div>`;
     // превью подложек — те же стили, что у чата
-    root.querySelectorAll('.ap-wall[data-wall]:not(.custom)').forEach((el) => {
+    root.querySelectorAll('.ap-wall[data-wall]:not(.custom):not(.art)').forEach((el) => {
       const probe = document.createElement('div'); probe.id = 'chatView'; probe.className = el.dataset.wall === 'dots' ? '' : 'wall-' + el.dataset.wall;
       probe.style.display = 'none'; document.body.appendChild(probe);
       const cs = getComputedStyle(probe);

@@ -787,6 +787,10 @@
     background: #ff4d6d; color: #fff; font: 700 11px/18px Inter, sans-serif; text-align: center; box-shadow: 0 2px 6px rgba(255,77,109,.45); animation: badgePop .45s var(--ease-spring); }
   .chat-item.unread .label { color: #fff; font-weight: 700; }
   .badge { min-width: 20px; text-align: center; }
+  .ap-walls.art { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .ap-wall.art { height: 80px; color: #fff; align-items: flex-end; padding: 0; }
+  .ap-wall.art span { width: 100%; padding: 14px 7px 5px; background: linear-gradient(transparent, rgba(0,0,0,.55)); font-size: 12px; line-height: 1.2; }
+  .ap-wall.art small { display: block; font-weight: 400; opacity: .85; font-size: 10.5px; }
 </style>
 </head>
 <body>
@@ -974,8 +978,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611210420"></script>
-<script src="config.js?v=202611210420"></script>
-<script src="app.js?v=202611210420"></script>
+<script src="vendor/supabase.js?v=202611210440"></script>
+<script src="config.js?v=202611210440"></script>
+<script src="app.js?v=202611210440"></script>
 </body>
 </html>
