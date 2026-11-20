@@ -702,7 +702,7 @@ function renderSidebar() {
     const active = state.view === 'chat' && chat === state.current;
     const live = callCount(chat) ? '<span class="call-ind" title="Идёт звонок">📞</span>' : '';
     return `<div class="chat-item ${active ? 'active' : ''} ${n ? 'unread' : ''}" data-chat="${chat}">
-      ${prefix}<span class="label">${esc(label)}${sub ? `<small class="pos">${esc(sub)}</small>` : ''}</span>${live}${n ? `<span class="badge">${n}</span>` : ''}</div>`;
+      ${prefix}<span class="label">${esc(label)}${sub ? `<small class="pos">${esc(sub)}</small>` : ''}</span>${live}${n ? `<span class="badge ${state.popChat === chat ? 'pop' : ''}">${n}</span>` : ''}</div>`;
   };
   $('#channelList').innerHTML = state.channels.map((c) => item(`c:${c.id}`, c.name, '<span class="ico">#</span>')).join('');
   const groups = [...state.groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -714,6 +714,7 @@ function renderSidebar() {
     item(dmKey(state.me.id, u.id), (u.id === state.me.id ? u.name + ' (вы)' : u.name) + (statusOf(u) && u.statusEmoji ? ' ' + u.statusEmoji : ''), `<span class="sava">${avatar(u, 'sm')}<span class="dot ${state.online.has(u.id) ? 'on' : ''}"></span></span>`, statusOf(u) || u.position)
   ).join('');
   document.querySelectorAll('.chat-item[data-chat]').forEach((el) => el.onclick = () => openChat(el.dataset.chat));
+  state.popChat = null;
   $('#navCalendar').classList.toggle('active', state.view === 'calendar');
   $('#navTasks').classList.toggle('active', state.view === 'tasks');
   $('#navAdmin').classList.toggle('active', state.view === 'admin');
@@ -896,6 +897,7 @@ async function fetchMessages(chat, beforeId) {
 }
 
 function onMessage(m) {
+  if (m.userId !== state.me.id) state.popChat = m.chat; // счётчик этого чата «подпрыгнет»
   const list = state.messages.get(m.chat);
   if (list && !list.some((x) => x.id === m.id)) list.push(m);
   const visible = state.view === 'chat' && m.chat === state.current;
@@ -1085,6 +1087,7 @@ function appendMessage(m) {
   if (box.querySelector('.empty')) box.innerHTML = '';
   const idx = list.findIndex((x) => x.id === m.id);
   box.insertAdjacentHTML('beforeend', messageHtml(m, list[idx - 1]));
+  box.lastElementChild?.classList.add('anim'); // новое сообщение «влетает»
   if (nearBottom) box.scrollTop = box.scrollHeight;
   hydrateImages(box);
 }
@@ -1191,7 +1194,7 @@ async function send() {
     toast('Сообщение не отправлено: ' + humanError(e));
   }
 }
-$('#sendBtn').onclick = send;
+$('#sendBtn').onclick = () => { const b = $('#sendBtn'); b.classList.remove('sent'); void b.offsetWidth; b.classList.add('sent'); send(); };
 $('#input').addEventListener('keydown', (e) => {
   if (mentionKey(e)) return;
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -1219,7 +1222,7 @@ function showTyping(userId) {
 function clearTyping(userId) { clearTimeout(state.typingTimers.get(userId)); state.typingTimers.delete(userId); renderTyping(); }
 function renderTyping() {
   const names = [...state.typingTimers.keys()].map((id) => state.users.get(id)?.name).filter(Boolean);
-  $('#typing').textContent = names.length ? names.join(', ') + (names.length > 1 ? ' печатают…' : ' печатает…') : '';
+  $('#typing').innerHTML = names.length ? `<span class="typing-dots"><i></i><i></i><i></i></span> ${esc(names.join(', '))} ${names.length > 1 ? 'печатают' : 'печатает'}` : '';
 }
 
 // ---------- Файлы ----------
