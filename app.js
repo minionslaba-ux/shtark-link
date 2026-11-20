@@ -3264,8 +3264,8 @@ function stopRingtone() {
 
 // ---------- Уведомления ----------
 function localNotify(title, body, tag, url, onClick) {
-  // при включённых push уведомление придёт с сервера — не дублируем (кроме напоминаний календаря)
-  if (state.push.sub && !String(tag).startsWith('ev')) return;
+  // при включённых push уведомление придёт с сервера (сообщения, задачи, звонки, дела календаря) — не дублируем
+  if (state.push.sub) return;
   if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   if (state.push.reg) {
     state.push.reg.showNotification(title, { body, tag, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: new URL(url, location.href).href } }).catch(() => {});
