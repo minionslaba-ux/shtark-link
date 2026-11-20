@@ -1583,19 +1583,27 @@ function stopVoice(cancel) { if (!rec.mr) return; rec.cancel = cancel; rec.mr.st
 $('#voiceBtn').onclick = startVoice;
 // Фирменные стикеры Shtark
 const STICKERS = [{"id": "ok", "title": "Принято"}, {"id": "done", "title": "Сделано!"}, {"id": "thanks", "title": "Спасибо!"}, {"id": "hi", "title": "Привет!"}, {"id": "morning", "title": "Доброе утро"}, {"id": "day", "title": "Хорошего дня"}, {"id": "call", "title": "Созвонимся?"}, {"id": "work", "title": "В работе"}, {"id": "urgent", "title": "Срочно!"}, {"id": "great", "title": "Отлично!"}, {"id": "lunch", "title": "На обеде"}, {"id": "coffee", "title": "Кофе?"}, {"id": "think", "title": "Подумаю"}, {"id": "wait", "title": "Минутку…"}, {"id": "agree", "title": "Договорились"}, {"id": "team", "title": "Команда Shtark"}];
+const STICKERS_LIVE = [{"id": "a-wave", "title": "Привет!"}, {"id": "a-ok", "title": "Принято"}, {"id": "a-done", "title": "Готово!"}, {"id": "a-rocket", "title": "Погнали!"}, {"id": "a-fire", "title": "Горит!"}, {"id": "a-heart", "title": "Спасибо!"}, {"id": "a-coffee", "title": "Кофе-брейк"}, {"id": "a-call", "title": "Звоню!"}, {"id": "a-time", "title": "Минутку…"}, {"id": "a-party", "title": "Ура!"}, {"id": "a-think", "title": "Думаю…"}, {"id": "a-clap", "title": "Браво!"}, {"id": "a-lol", "title": "Ха-ха!"}, {"id": "a-strong", "title": "Справимся!"}, {"id": "a-sleep", "title": "До завтра"}, {"id": "a-team", "title": "Shtark Team"}];
 function toggleStickers() {
   const pop = $('#stickerPop');
   if (!pop.classList.contains('hidden')) return pop.classList.add('hidden');
-  if (!pop.innerHTML) pop.innerHTML = `<div class="sp-head">Стикеры <b>Shtark</b></div><div class="sp-grid">` +
-    STICKERS.map((st) => `<button data-st="${st.id}" title="${esc(st.title)}"><img src="stickers/${st.id}.svg" alt="${esc(st.title)}" loading="lazy"></button>`).join('') + '</div>';
+  const grid = (list) => list.map((st) => `<button data-st="${st.id}" title="${esc(st.title)}"><img src="stickers/${st.id}.svg" alt="${esc(st.title)}" loading="lazy"></button>`).join('');
+  let tab = 'live';
+  try { tab = localStorage.getItem('sl-sticker-tab') || 'live'; } catch {}
+  const draw = () => {
+    pop.innerHTML = `<div class="sp-head"><div class="sp-tabs"><button data-tab="live" class="${tab === 'live' ? 'on' : ''}">✨ Анимированные</button><button data-tab="static" class="${tab === 'static' ? 'on' : ''}">Обычные</button></div><span>Стикеры <b>Shtark</b></span></div>
+      <div class="sp-grid">${grid(tab === 'live' ? STICKERS_LIVE : STICKERS)}</div>`;
+    pop.querySelectorAll('[data-tab]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); tab = b.dataset.tab; try { localStorage.setItem('sl-sticker-tab', tab); } catch {} draw(); });
+    pop.querySelectorAll('[data-st]').forEach((b) => b.onclick = () => { pop.classList.add('hidden'); sendSticker(b.dataset.st); });
+  };
+  draw();
   pop.classList.remove('hidden');
-  pop.querySelectorAll('[data-st]').forEach((b) => b.onclick = () => { pop.classList.add('hidden'); sendSticker(b.dataset.st); });
   setTimeout(() => document.addEventListener('pointerdown', function off(e) {
     if (!pop.contains(e.target) && e.target.id !== 'stickerBtn') { pop.classList.add('hidden'); document.removeEventListener('pointerdown', off); }
   }), 0);
 }
 async function sendSticker(id) {
-  const st = STICKERS.find((x) => x.id === id), chat = state.current;
+  const st = STICKERS.concat(STICKERS_LIVE).find((x) => x.id === id), chat = state.current;
   if (!st || !chat) return;
   const replyTo = state.replyTo?.id || null;
   state.replyTo = null; renderComposerBar();

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <style>
+    text, g, circle, path, rect { transform-box: fill-box; transform-origin: center; }
+    .gloss { animation: gloss 3.2s ease-in-out infinite; }
+    @keyframes gloss { 0%, 55% { transform: translateX(-260px) skewX(-20deg); } 100% { transform: translateX(260px) skewX(-20deg); } }
+    .z{opacity:0;animation:zz 2.4s ease-in-out infinite}.z2{animation-delay:.5s}.z3{animation-delay:1s}@keyframes zz{0%{opacity:0;transform:translate(-6px,10px)}30%{opacity:1}100%{opacity:0;transform:translate(8px,-14px)}}
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#312e81"/></linearGradient>
+    <linearGradient id="gl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <clipPath id="c"><rect x="32" y="32" width="192" height="192" rx="40"/></clipPath>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#0f172a" flood-opacity=".28"/></filter>
+  </defs>
+  <g filter="url(#s)">
+    <rect x="22" y="22" width="212" height="212" rx="48" fill="#fff"/>
+    <rect x="32" y="32" width="192" height="192" rx="40" fill="url(#g)"/>
+  </g>
+  <g clip-path="url(#c)">
+    <rect class="gloss" x="0" y="20" width="90" height="220" fill="url(#gl)"/>
+    <text class="" x="116" y="132" font-size="72" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif" text-anchor="middle">😴</text><g fill="#fff" font-weight="800" font-family="Inter, Arial, sans-serif"><text class="z z1" x="160" y="84" font-size="20">z</text><text class="z z2" x="172" y="66" font-size="26">z</text><text class="z z3" x="186" y="46" font-size="32">Z</text></g>
+  </g>
+  <text x="128" y="176" font-size="34" font-weight="800" text-anchor="middle" fill="#fff" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" letter-spacing="-.5">До завтра</text>
+  <g>
+    <rect x="82" y="191" width="92" height="22" rx="11" fill="#fff" fill-opacity=".92"/>
+    <text x="134" y="206" font-size="12.5" font-weight="800" text-anchor="middle" fill="#312e81" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" letter-spacing="2.2">SHTARK</text>
+    <circle cx="96" cy="202" r="4" fill="#312e81"/>
+  </g>
+</svg>
