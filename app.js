@@ -598,7 +598,7 @@ function isImage(f) { return /^image\/(png|jpe?g|gif|webp|bmp)$/.test(f?.mime ||
 
 function messageHtml(m, prev) {
   const newDay = !prev || new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
-  const dayHtml = newDay ? `<div class="day">${fmtDay(m.createdAt)}</div>` : '';
+  const dayHtml = newDay ? `<div class="day"><span>${fmtDay(m.createdAt)}</span></div>` : '';
   if (m.system) return dayHtml + `<div class="sys" data-id="${m.id}">${esc(m.text)} · ${fmtTime(m.createdAt)}</div>`;
   const u = state.users.get(m.userId) || { name: 'Сотрудник', id: m.userId };
   const cont = !newDay && prev && !prev.system && prev.userId === m.userId && m.createdAt - prev.createdAt < 5 * 60e3;
@@ -615,7 +615,7 @@ function messageHtml(m, prev) {
     }
   }
   return dayHtml +
-    `<div class="msg ${cont ? 'cont' : ''}" data-id="${m.id}">
+    `<div class="msg ${cont ? 'cont' : ''} ${m.userId === state.me.id ? 'mine' : ''}" data-id="${m.id}">
       ${avatar(u)}
       <div class="body">
         <div class="meta"><b>${esc(u.name)}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b><span>${fmtTime(m.createdAt)}</span></div>
@@ -1623,6 +1623,7 @@ async function collectCallDiag() {
   }
   const audioEls = [...document.querySelectorAll('#callAudio audio')].map((a) => ({ paused: a.paused, muted: a.muted, vol: a.volume }));
   const data = {
+    v: APP_VERSION, relay: !!call.relay, pc: pcStates(room), log: call.log || [],
     ua: navigator.userAgent.slice(0, 160), standalone: isStandalone, state: room.state, canPlayAudio: room.canPlaybackAudio,
     mic: { want: call.mic, published: !!micPub, muted: !!micPub?.isMuted, level: Math.round((lp.audioLevel || 0) * 100) / 100,
       bytesSent, error: call.micError || null, pair: pairInfo(micStats) },
@@ -1644,13 +1645,44 @@ function unlockAudio() {
   } catch { return null; }
 }
 
-async function joinCall(chat) {
+// Состояние двух медиаканалов LiveKit (отправка и приём)
+function pcStates(room) {
+  const pm = room?.engine?.pcManager;
+  const st = (t) => { try { return t?.getConnectionState?.() || t?.pc?.connectionState || null; } catch { return null; } };
+  return { pub: st(pm?.publisher), sub: st(pm?.subscriber) };
+}
+function mediaConnected(room) {
+  const { pub, sub } = pcStates(room);
+  if (!pub && !sub) return true; // не можем определить — не мешаем
+  return pub === 'connected' || sub === 'connected';
+}
+function callLog(e, d) {
+  if (!call.log) call.log = [];
+  call.log.push({ t: Math.round((Date.now() - (call.started || Date.now())) / 100) / 10, e, ...(d !== undefined ? { d: String(d).slice(0, 80) } : {}) });
+  if (call.log.length > 25) call.log.shift();
+}
+const relayPreferred = () => { try { return localStorage.getItem('sl-relay') === '1'; } catch { return false; } };
+
+// Голос не пошёл за 10 с — переподключаемся через ретранслятор LiveKit (TURN/TLS на 443: проходит там, где прямое соединение режут)
+async function rejoinViaRelay(chat) {
+  const room = call.room, ctx = call.audioCtx;
+  callLog('relay-switch');
+  try { localStorage.setItem('sl-relay', '1'); } catch {}
+  toast('Слабое соединение — переключаюсь на защищённый канал…');
+  call.room = null; // чтобы Disconnected не закрыл окно звонка
+  await room.disconnect().catch(() => {});
+  cleanupCall({ keepUi: true, keepCtx: true });
+  await joinCall(chat, { relay: true, rejoin: true, audioCtx: ctx });
+}
+
+async function joinCall(chat, opts = {}) {
   if (call.chat === chat || call.joining) return; // защита от двойного входа
   // Микрофон запрашиваем сразу, в момент нажатия: iPhone не разрешает запрос «потом»
   const micPromise = requestMic();
   micPromise.catch(() => {});
   // iPhone разрешает звук, только если его «включили» прямо в момент нажатия — делаем это сразу
-  const audioCtx = unlockAudio();
+  const audioCtx = opts.audioCtx || unlockAudio();
+  const relay = opts.relay || relayPreferred();
   if (call.chat) {
     if (!confirm('Вы уже в звонке. Завершить его и перейти в новый?')) {
       micPromise.then((s) => s.getTracks().forEach((t) => t.stop()), () => {});
@@ -1669,10 +1701,26 @@ async function joinCall(chat) {
       webAudioMix: audioCtx ? { audioContext: audioCtx } : false, // звук собеседников идёт через уже разблокированный AudioContext
     });
     call.chat = chat; call.room = room; call.started = Date.now(); call.mic = true; call.micError = null; call.cam = false; call.screen = false;
+    call.audioCtx = audioCtx; call.loud = false; call.relay = relay;
+    if (!opts.rejoin) call.log = [];
+    callLog(relay ? 'join-relay' : 'join');
     room
-      .on(LK.RoomEvent.TrackSubscribed, (track) => { if (track.kind === 'audio') $('#callAudio').appendChild(track.attach()); renderCall(); })
+      .on(LK.RoomEvent.ConnectionStateChanged, (st) => callLog('state', st))
+      .on(LK.RoomEvent.SignalReconnecting, () => callLog('signal-reconnecting'))
+      .on(LK.RoomEvent.Reconnecting, () => callLog('reconnecting'))
+      .on(LK.RoomEvent.Reconnected, () => callLog('reconnected'))
+      .on(LK.RoomEvent.MediaDevicesError, (e) => callLog('media-error', e?.name || e))
+      .on(LK.RoomEvent.TrackSubscriptionFailed, (sid) => callLog('sub-failed', sid))
+      .on(LK.RoomEvent.LocalTrackPublished, (pub) => callLog('published', pub?.source))
+      .on(LK.RoomEvent.TrackSubscribed, (t) => callLog('subscribed', t?.source))
+      .on(LK.RoomEvent.Disconnected, (r) => callLog('disconnected', r));
+    room
+      .on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        if (track.kind === 'audio') { $('#callAudio').appendChild(track.attach()); applyVolume(participant); }
+        renderCall();
+      })
       .on(LK.RoomEvent.TrackUnsubscribed, (track) => { track.detach().forEach((el) => el.remove()); renderCall(); })
-      .on(LK.RoomEvent.ParticipantConnected, () => { clearTimeout(call.ringTimeout); renderCall(); })
+      .on(LK.RoomEvent.ParticipantConnected, () => { clearTimeout(call.ringTimeout); stopRingback(); renderCall(); })
       .on(LK.RoomEvent.ParticipantDisconnected, () => {
         renderCall();
         if (chat.startsWith('d:') && room.remoteParticipants.size === 0) { toast('Собеседник завершил звонок'); leaveCall(); }
@@ -1682,7 +1730,16 @@ async function joinCall(chat) {
       .on(LK.RoomEvent.LocalTrackPublished, renderCall).on(LK.RoomEvent.LocalTrackUnpublished, renderCall)
       .on(LK.RoomEvent.Disconnected, () => { if (call.room === room) cleanupCall(); })
       .on(LK.RoomEvent.AudioPlaybackStatusChanged, () => $('#callSound').classList.toggle('hidden', room.canPlaybackAudio));
-    await room.connect(tok.url, tok.token);
+    await room.connect(tok.url, tok.token, relay ? { rtcConfig: { iceTransportPolicy: 'relay' } } : {});
+    callLog('connected');
+    // сторожевой таймер: если голосовой канал не поднялся — пробуем ретранслятор, а если и он не помог — объясняем
+    setTimeout(() => {
+      if (call.room !== room || mediaConnected(room)) return;
+      callLog('media-timeout', JSON.stringify(pcStates(room)));
+      collectCallDiag();
+      if (!relay) rejoinViaRelay(chat);
+      else toast('Не удаётся установить голосовое соединение. Похоже, сеть блокирует звонки: попробуйте другую сеть (мобильный интернет или другой Wi‑Fi) или отключите/включите VPN.');
+    }, 10000);
     $('#callTitle').textContent = chatTitle(chat);
     $('#callPanel').classList.remove('hidden');
     room.startAudio().catch(() => {});
@@ -1706,12 +1763,15 @@ async function joinCall(chat) {
     announceCall();
     renderChatHeader();
     // Звоним, только если в комнате ещё никого нет (иначе мы просто присоединились к идущему звонку)
-    if (room.remoteParticipants.size === 0) {
+    if (room.remoteParticipants.size === 0 && !opts.rejoin) {
       state.rt.send({ type: 'broadcast', event: 'call', payload: { type: 'ring', chat, from: state.me.id } });
-      if (!chat.startsWith('c:')) fn('sl-push', { action: 'ring', chat }).catch(() => {});
+      if (!chat.startsWith('c:')) {
+        fn('sl-push', { action: 'ring', chat }).catch(() => {});
+        startRingback(); // гудки, пока не ответят
+      }
       if (chat.startsWith('d:')) {
         call.ringTimeout = setTimeout(() => {
-          if (call.chat === chat && room.remoteParticipants.size === 0) { toast('Абонент не отвечает'); leaveCall(); }
+          if (call.chat === chat && room.remoteParticipants.size === 0) { toast('Абонент не отвечает'); playBusy(); leaveCall(); }
         }, 45000);
       }
     }
@@ -1732,12 +1792,16 @@ async function leaveCall() {
   cleanupCall();
   await room.disconnect().catch(() => {});
 }
-function cleanupCall() {
+function cleanupCall(o = {}) {
   clearInterval(call.timer); clearInterval(call.diagTimer); clearTimeout(call.ringTimeout);
+  stopRingback();
+  const ctx = call.audioCtx; call.audioCtx = null;
+  if (ctx && !o.keepCtx) setTimeout(() => ctx.close?.().catch(() => {}), 2500); // даём доиграть сигналу «занято»
   if (call.room) collectCallDiag();
   call.chat = null; call.room = null;
+  if (o.keepUi) { $('#callGrid').innerHTML = ''; $('#callAudio').innerHTML = ''; return; }
   $('#callPanel').classList.add('hidden');
-  $('#callPanel').classList.remove('big');
+  $('#callPanel').classList.remove('big', 'mini');
   $('#callGrid').innerHTML = '';
   $('#callAudio').innerHTML = '';
   announceCall();
@@ -1769,6 +1833,8 @@ function renderCall() {
     }
   });
   $('#callMic').classList.toggle('off', !call.mic);
+  $('#callSpeaker').classList.toggle('off', !!call.loud);
+  $('#callSpeaker').textContent = call.loud ? '🔊' : '🔈';
   $('#callMic').textContent = call.mic ? '🎤' : '🔇';
   $('#callCam').classList.toggle('off', call.cam);
   $('#callScreen').classList.toggle('off', call.screen);
@@ -1815,7 +1881,63 @@ $('#callScreen').onclick = async () => {
   renderCall();
 };
 $('#callLeave').onclick = () => leaveCall();
-$('#callExpand').onclick = () => $('#callPanel').classList.toggle('big');
+// на телефоне звонок во весь экран (кнопка сворачивает), на компьютере — окошко (кнопка разворачивает)
+const isPhoneLayout = () => window.matchMedia('(max-width: 720px)').matches;
+$('#callExpand').onclick = () => $('#callPanel').classList.toggle(isPhoneLayout() ? 'mini' : 'big');
+
+// ---------- Гудки и сигнал «занято» (425 Гц, как в телефонной сети) ----------
+let ringback = null;
+function tone(ctx, at, dur, freq = 425, vol = 0.12) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0, at);
+  g.gain.linearRampToValueAtTime(vol, at + 0.02);
+  g.gain.setValueAtTime(vol, at + dur - 0.03);
+  g.gain.linearRampToValueAtTime(0, at + dur);
+  o.connect(g).connect(ctx.destination);
+  o.start(at); o.stop(at + dur + 0.05);
+}
+function startRingback() {
+  const ctx = call.audioCtx;
+  if (!ctx || ringback) return;
+  const beep = () => tone(ctx, ctx.currentTime + 0.05, 1.0); // гудок 1 с, пауза 4 с
+  beep();
+  ringback = setInterval(beep, 5000);
+}
+function stopRingback() { clearInterval(ringback); ringback = null; }
+function playBusy() {
+  const ctx = call.audioCtx;
+  stopRingback();
+  if (!ctx) return;
+  for (let i = 0; i < 4; i++) tone(ctx, ctx.currentTime + 0.05 + i * 0.7, 0.35);
+}
+
+// ---------- Громкая связь ----------
+function applyVolume(p) {
+  if (!p?.setVolume) return;
+  // усиление выше 100% возможно только через Web Audio (на iPhone — именно так)
+  const loud = call.loud ? (call.audioCtx ? 3 : 1) : 1;
+  try { p.setVolume(loud); } catch {}
+}
+$('#callSpeaker').onclick = async () => {
+  const room = call.room;
+  if (!room) return;
+  call.loud = !call.loud;
+  // 1) если браузер умеет выбирать динамик — переключаем устройство вывода
+  try {
+    const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audiooutput' && d.label);
+    if (outs.length > 1) {
+      const speaker = outs.find((d) => /speaker|динамик|громк/i.test(d.label));
+      const ear = outs.find((d) => /earpiece|receiver|трубк|телефон/i.test(d.label)) || outs.find((d) => d.deviceId === 'default');
+      const target = call.loud ? speaker : ear;
+      if (target) await room.switchActiveDevice('audiooutput', target.deviceId);
+    }
+  } catch {}
+  // 2) громкость собеседников (на iPhone — главный способ)
+  for (const p of room.remoteParticipants.values()) applyVolume(p);
+  renderCall();
+  toast(call.loud ? '🔊 Громкая связь включена' : 'Громкая связь выключена');
+};
 window.addEventListener('beforeunload', () => { call.room?.disconnect(); });
 
 // Входящий звонок
@@ -1841,6 +1963,7 @@ function onCallSignal(p) {
     toast(`Пропущенный звонок от ${userName(p.from)}`, () => openChat(p.chat));
   } else if (p.type === 'decline' && call.chat === p.chat && p.chat.startsWith('d:')) {
     toast(`${userName(p.from)} отклонил(а) звонок`);
+    playBusy();
     leaveCall();
   }
 }
