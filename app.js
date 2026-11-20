@@ -23,6 +23,7 @@ const state = {
   quoted: new Map(),    // id -> сообщение (для цитат, если его нет в загруженном списке)
   pins: new Map(),      // чат -> закреплённые сообщения
   replyTo: null, editing: null,
+  threadCounts: new Map(), votes: new Map(), saved: new Set(), threadOpen: null, urgentNext: false,
 };
 
 
@@ -231,7 +232,7 @@ function openModal(html, onMount, cls = '') {
   const first = $('#modalCard').querySelector('input:not([type=checkbox]), textarea');
   first && first.focus();
 }
-function closeModal() { state.openTaskId = null; $('#modal').classList.add('hidden'); $('#modalCard').innerHTML = ''; }
+function closeModal() { state.openTaskId = null; state.threadOpen = null; $('#modal').classList.add('hidden'); $('#modalCard').innerHTML = ''; }
 $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeModal(); $('#lightbox').classList.add('hidden'); }
@@ -546,6 +547,7 @@ $('#meName').onclick = openMyProfile;
 $('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
 $('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
 $('#navLook').onclick = () => { setSidebar(false); openAppearance(); };
+$('#navSaved').onclick = () => { setSidebar(false); openSaved(); };
 
 // ---------- Старт ----------
 async function start() {
@@ -560,7 +562,7 @@ async function start() {
   state.me = profileFromRow(me);
   loadPrefsFromProfile(me);
   const [users, channels, groups, members] = await Promise.all([
-    sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday'),
+    sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday, last_active'),
     sb.from('sl_channels').select('id, name, readonly, is_public, auto_join, created_by').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
@@ -592,6 +594,7 @@ async function start() {
   loadEventsForMonth(state.calMonth).then(() => { renderSidebar(); checkReminders(); }).catch(() => {});
   loadUnread();
   loadAnnouncements();
+  sb.from('sl_saved').select('message_id').then(({ data }) => { state.saved = new Set((data || []).map((r) => r.message_id)); });
   state.tasksLoaded = loadTasks().then(() => {
     const overdue = [...state.tasks.values()].filter((t) => t.assigneeId === state.me.id && isOverdue(t)).length;
     if (overdue) toast(`⚠ У вас ${overdue} ${plural(overdue, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, () => { setTaskFilter('mine'); openTasks(); });
@@ -610,7 +613,8 @@ const posOf = (id) => state.users.get(id)?.position || '';
 function profileFromRow(u) {
   return { id: u.id, login: u.login, name: u.name, position: u.position || '', avatar: u.avatar_url || '', isAdmin: !!u.is_admin, disabled: !!u.disabled,
     statusText: u.status_text || '', statusEmoji: u.status_emoji || '', statusUntil: u.status_until ? Date.parse(u.status_until) : null,
-    dnd: !!u.dnd, dndFrom: u.dnd_from || '22:00', dndTo: u.dnd_to || '08:00', phone: u.phone || '', department: u.department || '', birthday: u.birthday || '' };
+    dnd: !!u.dnd, dndFrom: u.dnd_from || '22:00', dndTo: u.dnd_to || '08:00', phone: u.phone || '', department: u.department || '', birthday: u.birthday || '',
+    lastActive: u.last_active ? Date.parse(u.last_active) : null };
 }
 // статус («🏖 В отпуске до 25.11»), если не истёк
 function statusOf(u) {
@@ -646,6 +650,7 @@ function connectRealtime() {
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'sl_messages' }, (p) => p.old?.id && onMessageDeleted(p.old.id))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sl_messages' }, (p) => onMessageUpdated(msgFromRow(p.new)))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reactions' }, onReactionChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_poll_votes' }, onVoteChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_reads' }, onReadChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_profiles' }, onProfileChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_channels' }, () => reloadChannels())
@@ -1091,7 +1096,7 @@ function renderChatHeader() {
     const [, a, b] = chat.split(':');
     const other = state.users.get(a === state.me.id ? b : a);
     if (other && other.id !== state.me.id) {
-      $('#chatTitle').innerHTML += `<span class="sub">${statusOf(other) ? esc(statusOf(other)) + ' · ' : ''}${other.position ? esc(other.position) + ' · ' : ''}${state.online.has(other.id) ? 'в сети' : 'не в сети'}</span>`;
+      $('#chatTitle').innerHTML += `<span class="sub">${statusOf(other) ? esc(statusOf(other)) + ' · ' : ''}${other.position ? esc(other.position) + ' · ' : ''}${seenText(other)}</span>`;
       actions = `<button class="hbtn" id="assignBtn" data-uid="${other.id}" title="Поручить задачу">📋 <span class="lbl">Поручить задачу</span></button>`;
     }
   }
@@ -1103,7 +1108,7 @@ function renderChatHeader() {
   $('#readonlyNote').textContent = obs ? (chat.startsWith('d:') ? '👁 Личная переписка сотрудников — просмотр как администратор' : '👁 Вы не участник этого чата — просмотр как администратор') : '🔒 В этом канале пишут только администраторы';
   $('#readonlyNote').classList.toggle('hidden', !ro);
   document.querySelector('#chatView .input-row').classList.toggle('hidden', ro);
-  actions += `<button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
+  actions += `<button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
   $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + ' ' + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
@@ -1116,16 +1121,18 @@ function renderChatHeader() {
   const cb = $('#callBtn');
   if (cb) cb.onclick = () => joinCall(chat);
   $('#exportBtn').onclick = () => exportChat(chat);
+  $('#filesBtn').onclick = () => openChatFiles(chat);
   renderPinBar();
 }
 
 function msgFromRow(r) {
   return { id: r.id, chat: r.chat, userId: r.user_id, text: r.text, file: r.file, system: r.system, createdAt: Date.parse(r.created_at),
     replyTo: r.reply_to || null, editedAt: r.edited_at ? Date.parse(r.edited_at) : null, pinnedAt: r.pinned_at ? Date.parse(r.pinned_at) : null,
-    pinnedBy: r.pinned_by || null, mentions: r.mentions || [], sticker: r.sticker || null };
+    pinnedBy: r.pinned_by || null, mentions: r.mentions || [], sticker: r.sticker || null,
+    fwd: r.fwd || null, poll: r.poll || null, threadRoot: r.thread_root || null, urgent: !!r.urgent };
 }
 async function fetchMessages(chat, beforeId) {
-  let q = sb.from('sl_messages').select('*').eq('chat', chat).order('id', { ascending: false }).limit(50);
+  let q = sb.from('sl_messages').select('*').eq('chat', chat).is('thread_root', null).order('id', { ascending: false }).limit(50);
   if (beforeId) q = q.lt('id', beforeId);
   const msgs = check(await q).reverse().map(msgFromRow);
   await loadExtras(msgs);
@@ -1133,6 +1140,8 @@ async function fetchMessages(chat, beforeId) {
 }
 
 function onMessage(m) {
+  if (m.threadRoot) return onThreadReply(m);
+  if (m.urgent && m.userId !== state.me.id && !isObserver(m.chat)) { playPing(false); setTimeout(() => playPing(false), 350); toast(`❗ Срочное от ${userName(m.userId)}: ${(m.text || '').slice(0, 80)}`, () => jumpTo(m.id, m.chat)); }
   if (m.userId !== state.me.id) state.popChat = m.chat; // счётчик этого чата «подпрыгнет»
   const list = state.messages.get(m.chat);
   if (list && !list.some((x) => x.id === m.id)) list.push(m);
@@ -1149,7 +1158,7 @@ function onMessage(m) {
 
 // Удаление сообщения: своё — автор, любое — администратор
 async function deleteMessage(id) {
-  const m = (state.messages.get(state.current) || []).find((x) => x.id === id);
+  const m = findMsg(id);
   if (!m || !confirm('Удалить сообщение у всех?')) return;
   try {
     const { data, error } = await sb.from('sl_messages').delete().eq('id', id).select('id');
@@ -1160,6 +1169,7 @@ async function deleteMessage(id) {
   } catch (e) { toast(humanError(e)); }
 }
 function onMessageDeleted(id) {
+  document.querySelector(`#thList [data-id="${id}"]`)?.remove();
   for (const [chat, list] of state.messages) {
     const i = list.findIndex((x) => x.id === id);
     if (i < 0) continue;
@@ -1183,6 +1193,7 @@ window.addEventListener('focus', tellSw);
 
 async function openChat(chat) {
   setTimeout(tellSw, 0);
+  if (state.current && state.current !== chat) flushDraft(state.current);
   if (!chat || !chatTitle(chat)) chat = `c:${state.channels[0]?.id}`;
   if (chat !== state.current) { state.replyTo = null; state.editing = null; renderComposerBar(); }
   showView('chat');
@@ -1204,6 +1215,8 @@ async function openChat(chat) {
   renderMessages(true);
   markRead();
   loadPins(chat);
+  loadDraft(chat);
+  loadScheduledBar(chat);
   if (!matchMedia('(hover: none)').matches) $('#input').focus();
 }
 
@@ -1226,7 +1239,9 @@ function messageHtml(m, prev) {
   let file = '';
   if (m.file) {
     const f = m.file;
-    if (f.voice) {
+    if (f.circle) {
+      file = `<div class="circle-wrap"><video class="circle" data-path="${esc(f.path)}" playsinline preload="metadata"></video><span class="circle-dur">${fmtDur(f.duration)}</span></div>`;
+    } else if (f.voice) {
       file = `<div class="voice"><audio controls preload="none" data-path="${esc(f.path)}"></audio><span class="fsize">${fmtDur(f.duration)}</span></div>`;
     } else if (isImage(f)) {
       file = `<img class="img-preview" data-path="${esc(f.path)}" alt="${esc(f.name)}">
@@ -1239,21 +1254,25 @@ function messageHtml(m, prev) {
   }
   const toMe = !mine && (m.mentions.includes(state.me.id) || (m.replyTo && findMsg(m.replyTo)?.userId === state.me.id));
   const canPin = !(isReadonly(m.chat) && !state.me.isAdmin);
-  const acts = `<div class="msg-acts">
+  const obs = isObserver(m.chat);
+  const acts = obs ? `<div class="msg-acts"><button data-act="forward" title="Переслать">↪</button><button data-act="save" title="В избранное">${state.saved.has(m.id) ? '★' : '☆'}</button></div>` : `<div class="msg-acts">
       <button data-act="react" title="Реакция">😊</button><button data-act="reply" title="Ответить">↩</button>
-      ${mine && !m.file?.voice && !m.sticker ? '<button data-act="edit" title="Изменить">✏️</button>' : ''}
-      ${canPin ? `<button data-act="pin" title="${m.pinnedAt ? 'Открепить' : 'Закрепить'}">📌</button>` : ''}
-      <button data-act="task" title="Сделать задачу">📋</button>
-      ${mine || state.me.isAdmin ? '<button data-act="del" title="Удалить">🗑</button>' : ''}
+      ${m.threadRoot ? '' : '<button data-act="thread" title="Обсудить в ветке">💬</button>'}
+      <button data-act="forward" title="Переслать">↪</button>
+      <button data-act="more" title="Ещё">⋯</button>
     </div>`;
+  const tc = state.threadCounts.get(m.id) || 0;
   return dayHtml +
-    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''} ${m.sticker ? 'has-sticker' : ''}" data-id="${m.id}">
+    `<div class="msg ${cont ? 'cont' : ''} ${mine ? 'mine' : ''} ${toMe ? 'tome' : ''} ${m.sticker ? 'has-sticker' : ''} ${m.urgent ? 'urgent' : ''} ${m.file?.circle ? 'has-circle' : ''}" data-id="${m.id}">
       ${avatar(u)}
       <div class="body">
         <div class="meta"><b>${esc(u.name)}${u.statusEmoji && statusOf(u) ? ' ' + esc(u.statusEmoji) : ''}${u.disabled ? ' <span class="muted">(отключён)</span>' : ''}</b>${u.position ? `<span class="pos">${esc(u.position)}</span>` : ''}<span>${fmtTime(m.createdAt)}</span>${m.pinnedAt ? '<span title="Закреплено">📌</span>' : ''}</div>
+        ${m.urgent ? '<div class="urgent-tag">❗ Срочно</div>' : ''}
+        ${m.fwd ? `<div class="fwd">↪ Переслано от <b>${esc(m.fwd.name || userName(m.fwd.user))}</b>${m.fwd.from ? ' · ' + esc(m.fwd.from) : ''}</div>` : ''}
         ${m.replyTo ? quoteHtml(m.replyTo) : ''}
-        ${m.sticker ? `<img class="sticker" src="stickers/${esc(m.sticker)}.svg" alt="${esc(m.text)}" title="${esc(m.text)}">` : m.text ? `<div class="text">${richText(m)}</div>` : ''}
+        ${m.poll ? pollHtml(m) : m.sticker ? `<img class="sticker" src="stickers/${esc(m.sticker)}.svg" alt="${esc(m.text)}" title="${esc(m.text)}">` : m.text ? `<div class="text">${richText(m)}</div>` : ''}
         ${file}
+        ${tc ? `<button class="thread-link" data-thread="${m.id}">💬 ${tc} ${plural(tc, 'ответ', 'ответа', 'ответов')} в ветке</button>` : ''}
         <div class="msg-foot">${reactsHtml(m)}<span class="mt">${m.editedAt ? 'изменено · ' : ''}${cont || mine ? fmtTime(m.createdAt) : ''}${mine && m.pinnedAt ? ' 📌' : ''}${mine ? ticksHtml(m) : ''}</span></div>
         ${acts}
       </div></div>`;
@@ -1303,6 +1322,8 @@ async function signedUrls(paths) {
   return paths.map((p) => state.signed.get(p)?.url);
 }
 async function hydrateImages(root) {
+  const vids = [...root.querySelectorAll('video.circle[data-path]:not([src])')];
+  if (vids.length) signedUrls(vids.map((a) => a.dataset.path)).then((u) => vids.forEach((a, i) => { if (u[i]) a.src = u[i] + '#t=0.1'; })).catch(() => {});
   const audios = [...root.querySelectorAll('audio[data-path]:not([src])')];
   if (audios.length) signedUrls(audios.map((a) => a.dataset.path)).then((u) => audios.forEach((a, i) => { if (u[i]) a.src = u[i]; })).catch(() => {});
   const imgs = [...root.querySelectorAll('img.img-preview[data-path]:not([src])')];
@@ -1359,6 +1380,14 @@ $('#messages').addEventListener('scroll', async (e) => {
 });
 
 $('#messages').addEventListener('click', async (e) => {
+  const tl = e.target.closest('.thread-link');
+  if (tl) return openThread(Number(tl.dataset.thread));
+  const po = e.target.closest('.poll-opt');
+  if (po) return votePoll(Number(po.closest('.msg').dataset.id), Number(po.dataset.opt));
+  const pc = e.target.closest('.poll-close');
+  if (pc) { try { await rpc('sl_poll_close', { p_id: Number(pc.closest('.msg').dataset.id) }); } catch (er) { toast(humanError(er)); } return; }
+  const cv = e.target.closest('video.circle');
+  if (cv) { if (cv.paused) { document.querySelectorAll('video.circle').forEach((v) => v !== cv && v.pause()); cv.muted = false; cv.play().catch(() => {}); } else cv.pause(); return; }
   const actBtn = e.target.closest('.msg-acts button');
   if (actBtn) return messageAction(actBtn.dataset.act, Number(actBtn.closest('.msg').dataset.id), actBtn);
   const reactBtn = e.target.closest('.react');
@@ -1435,8 +1464,10 @@ async function send() {
   autosize();
   state.replyTo = null; renderComposerBar();
   try {
-    const row = check(await sb.from('sl_messages').insert({ chat, user_id: state.me.id, text, reply_to: replyTo, mentions }).select().single());
+    const urgent = state.urgentNext; state.urgentNext = false; renderUrgentFlag();
+    const row = check(await sb.from('sl_messages').insert({ chat, user_id: state.me.id, text, reply_to: replyTo, mentions, urgent }).select().single());
     onMessage(msgFromRow(row));
+    clearDraft(chat);
   } catch (e) {
     $('#input').value = text; autosize();
     toast('Сообщение не отправлено: ' + humanError(e));
@@ -1455,6 +1486,7 @@ $('#input').addEventListener('keydown', (e) => {
 $('#input').addEventListener('input', () => {
   autosize();
   updateMentionPopup();
+  saveDraftSoon();
   if (Date.now() - state.lastTypingSent > 2500 && state.rt) {
     state.lastTypingSent = Date.now();
     state.rt.send({ type: 'broadcast', event: 'typing', payload: { chat: state.current, userId: state.me.id } });
@@ -1512,7 +1544,7 @@ async function uploadFile(file, extra = {}) {
   };
   xhr.send(file);
 }
-$('#attachBtn').onclick = () => $('#fileInput').click();
+$('#attachBtn').onclick = (e) => openPlusMenu(e.currentTarget);
 $('#fileInput').onchange = (e) => { [...e.target.files].forEach((f) => uploadFile(f)); e.target.value = ''; };
 
 let dragDepth = 0;
@@ -1536,10 +1568,17 @@ async function loadExtras(msgs) {
   if (!msgs.length) return;
   const ids = msgs.map((m) => m.id);
   const missing = [...new Set(msgs.map((m) => m.replyTo).filter((id) => id && !ids.includes(id) && !findMsg(id)))];
-  const [re, qu] = await Promise.all([
+  const pollIds = msgs.filter((m) => m.poll).map((m) => m.id);
+  const [re, qu, th, pv] = await Promise.all([
     sb.from('sl_reactions').select('message_id, user_id, emoji').in('message_id', ids),
     missing.length ? sb.from('sl_messages').select('*').in('id', missing) : Promise.resolve({ data: [] }),
+    sb.from('sl_messages').select('thread_root').in('thread_root', ids),
+    pollIds.length ? sb.from('sl_poll_votes').select('message_id, user_id, option').in('message_id', pollIds) : Promise.resolve({ data: [] }),
   ]);
+  ids.forEach((id) => state.threadCounts.delete(id));
+  (th.data || []).forEach((r) => state.threadCounts.set(r.thread_root, (state.threadCounts.get(r.thread_root) || 0) + 1));
+  pollIds.forEach((id) => state.votes.delete(id));
+  (pv.data || []).forEach((v) => addVote(v.message_id, v.option, v.user_id));
   ids.forEach((id) => state.reactions.delete(id));
   (re.data || []).forEach((r) => addReaction(r.message_id, r.emoji, r.user_id));
   (qu.data || []).forEach((r) => state.quoted.set(r.id, msgFromRow(r)));
@@ -1640,6 +1679,11 @@ async function messageAction(act, id, btn) {
     return;
   }
   if (act === 'react') return openReactPicker(id, btn);
+  if (act === 'more') return openMoreMenu(m, btn);
+  if (act === 'thread') return openThread(id);
+  if (act === 'forward') return openForward(m);
+  if (act === 'save') return toggleSaved(m);
+  if (act === 'remind') return openRemind(m);
   if (act === 'task') return openTaskFromMessage(m);
 }
 const REACTIONS = ['👍', '✅', '👀', '❤️', '😂', '🔥', '👏', '🙏', '❓', '😢'];
@@ -1864,6 +1908,402 @@ $('#stickerBtn').onclick = toggleStickers;
 $('#voiceSend').onclick = () => stopVoice(false);
 $('#voiceCancel').onclick = () => stopVoice(true);
 $('#searchBtn').onclick = openSearch;
+
+
+// ===================== v3: переписка =====================
+// «был(а) в сети …»
+function seenText(u) {
+  if (state.online.has(u.id)) return 'в сети';
+  if (!u.lastActive) return 'не в сети';
+  const min = Math.round((Date.now() - u.lastActive) / 60000);
+  const was = 'был(а) ';
+  if (min < 1) return was + 'только что';
+  if (min < 60) return was + min + ' мин назад';
+  const d = new Date(u.lastActive), t = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return was + 'сегодня в ' + t;
+  if (d.toDateString() === new Date(Date.now() - 864e5).toDateString()) return was + 'вчера в ' + t;
+  return was + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+// меню «⋯» у сообщения
+function openMoreMenu(m, btn) {
+  document.querySelector('.more-menu')?.remove();
+  const mine = m.userId === state.me.id, canPin = !(isReadonly(m.chat) && !state.me.isAdmin);
+  const items = [
+    mine && !m.file && !m.sticker && !m.poll ? ['edit', '✏️ Изменить'] : null,
+    canPin ? ['pin', m.pinnedAt ? '📌 Открепить' : '📌 Закрепить'] : null,
+    ['save', state.saved.has(m.id) ? '★ Убрать из избранного' : '☆ В избранное'],
+    ['remind', '⏰ Напомнить мне'],
+    ['task', '📋 Сделать задачей'],
+    mine || state.me.isAdmin ? ['del', '🗑 Удалить'] : null,
+  ].filter(Boolean);
+  const box = document.createElement('div');
+  box.className = 'more-menu';
+  box.innerHTML = items.map(([a, t]) => `<button data-a="${a}">${t}</button>`).join('');
+  document.body.appendChild(box);
+  const r = btn.getBoundingClientRect();
+  box.style.top = Math.min(innerHeight - box.offsetHeight - 8, r.bottom + 4) + 'px';
+  box.style.left = Math.max(8, Math.min(innerWidth - box.offsetWidth - 8, r.right - box.offsetWidth)) + 'px';
+  box.onclick = (e) => { const b = e.target.closest('button'); if (b) { box.remove(); messageAction(b.dataset.a, m.id); } };
+  setTimeout(() => document.addEventListener('pointerdown', function off(ev) { if (!box.contains(ev.target)) { box.remove(); document.removeEventListener('pointerdown', off); } }), 0);
+}
+
+// меню «➕» в поле ввода
+function openPlusMenu(btn) {
+  document.querySelector('.more-menu')?.remove();
+  const box = document.createElement('div');
+  box.className = 'more-menu up';
+  box.innerHTML = `<button data-a="file">📎 Файл или фото</button><button data-a="poll">📊 Опрос</button><button data-a="circle">⭕ Видеосообщение</button>
+    <button data-a="later">⏰ Отправить позже</button><button data-a="urgent">${state.urgentNext ? '✓ ' : ''}❗ Срочное сообщение</button>`;
+  document.body.appendChild(box);
+  const r = btn.getBoundingClientRect();
+  box.style.top = Math.max(8, r.top - box.offsetHeight - 6) + 'px';
+  box.style.left = Math.max(8, r.left) + 'px';
+  box.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return; box.remove();
+    ({ file: () => $('#fileInput').click(), poll: openPollForm, circle: startCircle, later: openSchedule,
+      urgent: () => { state.urgentNext = !state.urgentNext; renderUrgentFlag(); if (state.urgentNext) toast('❗ Следующее сообщение будет срочным: придёт даже в «Не беспокоить»'); } })[b.dataset.a]();
+  };
+  setTimeout(() => document.addEventListener('pointerdown', function off(ev) { if (!box.contains(ev.target)) { box.remove(); document.removeEventListener('pointerdown', off); } }), 0);
+}
+function renderUrgentFlag() { $('.input-row')?.classList.toggle('urgent-on', state.urgentNext); }
+
+// 1. Пересылка
+function openForward(m) {
+  const targets = [
+    ...state.channels.map((c) => ({ chat: `c:${c.id}`, title: '# ' + c.name, ico: '#' })),
+    ...[...state.groups.values()].filter((g) => g.members.includes(state.me.id)).map((g) => ({ chat: `g:${g.id}`, title: g.name, ico: '👥' })),
+    ...activeUsers().map((u) => ({ chat: dmKey(state.me.id, u.id), title: u.id === state.me.id ? u.name + ' (заметки себе)' : u.name, ico: '👤' })),
+  ].filter((t) => !isReadonly(t.chat) || state.me.isAdmin);
+  openModal(`<h3>↪ Переслать</h3><div class="modal-body">
+    <label class="field"><input id="fwQ" placeholder="Кому переслать"></label>
+    <div class="people">${targets.map((t) => `<label class="person" data-q="${esc(t.title.toLowerCase())}"><input type="checkbox" value="${esc(t.chat)}"><span class="ico">${t.ico}</span><span class="pname">${esc(t.title)}</span></label>`).join('')}</div>
+    <label class="field" style="margin-top:10px"><span>Комментарий (необязательно)</span><input id="fwText" maxlength="2000"></label>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="fwOk">Переслать</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelector('#fwQ').oninput = (e) => { const q = e.target.value.toLowerCase().trim(); root.querySelectorAll('.person').forEach((r) => r.classList.toggle('hidden', !!q && !r.dataset.q.includes(q))); };
+    root.querySelector('#fwOk').onclick = async () => {
+      const chats = [...root.querySelectorAll('.person input:checked')].map((i) => i.value);
+      if (!chats.length) return root.querySelector('#mErr').textContent = 'Выберите, кому переслать';
+      const note = root.querySelector('#fwText').value.trim();
+      const fwd = { user: m.fwd?.user || m.userId, name: m.fwd?.name || userName(m.userId), from: isMyChat(m.chat) && !m.chat.startsWith('d:') ? chatTitle(m.chat) : '', at: m.createdAt };
+      try {
+        for (const chat of chats) {
+          if (note) await sb.from('sl_messages').insert({ chat, user_id: state.me.id, text: note });
+          let file = null;
+          if (m.file) { // копия файла в папку нового чата
+            const ext = (m.file.path.split('.').pop() || 'bin');
+            const path = `${chat.replace(/:/g, '_')}/${crypto.randomUUID()}.${ext}`;
+            const cp = await sb.storage.from('sl-files').copy(m.file.path, path);
+            if (cp.error) throw cp.error;
+            file = { ...m.file, path };
+          }
+          const text = m.poll ? `📊 ${m.poll.question}\n` + m.poll.options.map((o) => '• ' + o).join('\n') : (m.text || '');
+          check(await sb.from('sl_messages').insert({ chat, user_id: state.me.id, text, file, sticker: m.sticker || null, fwd }));
+        }
+        closeModal(); toast(`↪ Переслано: ${chats.length}`);
+        if (chats.length === 1) openChat(chats[0]);
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+  });
+}
+
+// 2. Избранное
+async function toggleSaved(m) {
+  const on = state.saved.has(m.id);
+  try {
+    if (on) { check(await sb.from('sl_saved').delete().match({ user_id: state.me.id, message_id: m.id })); state.saved.delete(m.id); toast('Убрано из избранного'); }
+    else { check(await sb.from('sl_saved').insert({ user_id: state.me.id, message_id: m.id })); state.saved.add(m.id); toast('★ Добавлено в избранное'); }
+    rerenderMessage(m.id);
+  } catch (e) { toast(humanError(e)); }
+}
+async function openSaved() {
+  openModal(`<h3>★ Избранное</h3><div class="modal-body" id="svList"><p class="muted">Загрузка…</p></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`, (root) => root.querySelector('[data-close]').onclick = closeModal, 'wide');
+  try {
+    const sv = check(await sb.from('sl_saved').select('message_id, created_at').order('created_at', { ascending: false }).limit(200));
+    const ids = sv.map((r) => r.message_id);
+    const msgs = ids.length ? check(await sb.from('sl_messages').select('*').in('id', ids)).map(msgFromRow) : [];
+    const box = $('#svList'); if (!box) return;
+    const byId = new Map(msgs.map((m) => [m.id, m]));
+    box.innerHTML = ids.map((id) => byId.get(id)).filter(Boolean).map((m) => `<div class="person" data-id="${m.id}" data-chat="${esc(m.chat)}">${avatar(state.users.get(m.userId) || { id: m.userId, name: '?' }, 'sm')}
+      <span style="flex:1;min-width:0"><b>${esc(userName(m.userId))}</b> <span class="muted">· ${esc(chatTitle(m.chat))} · ${fmtDay(m.createdAt)}</span>
+      <div class="snip">${esc((m.text || (m.file ? '📎 ' + m.file.name : '')).slice(0, 200))}</div></span>
+      <button class="hbtn" data-unsave="${m.id}" title="Убрать">✕</button></div>`).join('') || '<p class="muted">Пока пусто. Отметьте сообщение через «⋯» → «☆ В избранное».</p>';
+    box.querySelectorAll('[data-unsave]').forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await sb.from('sl_saved').delete().match({ user_id: state.me.id, message_id: Number(b.dataset.unsave) }); state.saved.delete(Number(b.dataset.unsave)); b.closest('.person').remove(); });
+    box.querySelectorAll('.person[data-id]').forEach((el) => el.onclick = () => { closeModal(); jumpTo(Number(el.dataset.id), el.dataset.chat); });
+  } catch (e) { const b = $('#svList'); if (b) b.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
+}
+
+// 3. Опросы
+function addVote(id, opt, uid) {
+  if (!state.votes.has(id)) state.votes.set(id, new Map());
+  const v = state.votes.get(id);
+  if (!v.has(opt)) v.set(opt, new Set());
+  v.get(opt).add(uid);
+}
+function pollHtml(m) {
+  const p = m.poll, v = state.votes.get(m.id) || new Map();
+  const voters = new Set([...v.values()].flatMap((s) => [...s]));
+  const total = voters.size || 0, closed = !!p.closed;
+  return `<div class="poll ${closed ? 'closed' : ''}"><div class="poll-q">📊 ${esc(p.question)}</div>
+    ${p.options.map((o, i) => { const set = v.get(i) || new Set(), n = set.size, pct = total ? Math.round(n / total * 100) : 0, me = set.has(state.me.id);
+      return `<button class="poll-opt ${me ? 'on' : ''}" data-opt="${i}" ${closed || isObserver(m.chat) ? 'disabled' : ''} title="${esc([...set].map(userName).join(', '))}">
+        <span class="poll-bar" style="width:${pct}%"></span><span class="poll-t">${me ? '✓ ' : ''}${esc(o)}</span><span class="poll-n">${n ? pct + '%' : ''}</span></button>`; }).join('')}
+    <div class="poll-foot">${total} ${plural(total, 'голос', 'голоса', 'голосов')}${p.multi ? ' · можно несколько' : ''}${closed ? ' · опрос завершён' : ''}
+      ${m.userId === state.me.id && !closed ? '<button class="poll-close">Завершить</button>' : ''}</div></div>`;
+}
+async function votePoll(id, opt) {
+  const m = findMsg(id); if (!m?.poll || m.poll.closed) return;
+  const v = state.votes.get(id) || new Map();
+  const mineOpts = [...v.entries()].filter(([, s]) => s.has(state.me.id)).map(([o]) => o);
+  try {
+    if (mineOpts.includes(opt)) { await sb.from('sl_poll_votes').delete().match({ message_id: id, user_id: state.me.id, option: opt }); v.get(opt)?.delete(state.me.id); }
+    else {
+      if (!m.poll.multi && mineOpts.length) { await sb.from('sl_poll_votes').delete().match({ message_id: id, user_id: state.me.id }); mineOpts.forEach((o) => v.get(o)?.delete(state.me.id)); }
+      check(await sb.from('sl_poll_votes').insert({ message_id: id, chat: m.chat, user_id: state.me.id, option: opt })); addVote(id, opt, state.me.id);
+    }
+    rerenderMessage(id);
+  } catch (e) { toast(humanError(e)); }
+}
+function onVoteChange(p) {
+  const r = p.new?.message_id ? p.new : p.old;
+  if (!r?.message_id) return;
+  if (p.eventType === 'DELETE') state.votes.get(r.message_id)?.get(r.option)?.delete(r.user_id); else addVote(r.message_id, r.option, r.user_id);
+  if (state.view === 'chat' && r.chat === state.current) rerenderMessage(r.message_id);
+}
+function openPollForm() {
+  openModal(`<h3>📊 Новый опрос</h3><div class="modal-body">
+    <label class="field"><span>Вопрос</span><input id="pqQ" maxlength="300" placeholder="Например: когда проведём планёрку?"></label>
+    <div class="field"><span>Варианты ответа</span><div id="pqOpts"></div><button class="secondary" id="pqAdd" type="button" style="padding:6px 10px">+ вариант</button></div>
+    <label class="check"><input type="checkbox" id="pqMulti"> Можно выбрать несколько</label>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pqOk">Отправить опрос</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const box = root.querySelector('#pqOpts');
+    const add = (v = '') => { if (box.children.length >= 10) return; const i = document.createElement('input'); i.maxLength = 100; i.placeholder = `Вариант ${box.children.length + 1}`; i.value = v; i.style.marginBottom = '6px'; box.appendChild(i); };
+    add(); add(); add();
+    root.querySelector('#pqAdd').onclick = () => add();
+    root.querySelector('#pqOk').onclick = async () => {
+      const q = root.querySelector('#pqQ').value.trim();
+      const opts = [...box.querySelectorAll('input')].map((i) => i.value.trim()).filter(Boolean);
+      if (!q) return root.querySelector('#mErr').textContent = 'Напишите вопрос';
+      if (opts.length < 2) return root.querySelector('#mErr').textContent = 'Нужно хотя бы 2 варианта';
+      try {
+        const row = check(await sb.from('sl_messages').insert({ chat: state.current, user_id: state.me.id, text: q, poll: { question: q, options: opts, multi: root.querySelector('#pqMulti').checked } }).select().single());
+        closeModal(); onMessage(msgFromRow(row));
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+  });
+}
+
+// 4. Отправить позже и «напомнить мне»
+const pad2 = (n) => String(n).padStart(2, '0');
+const localInput = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+function openSchedule() {
+  const text = $('#input').value.trim();
+  const t = new Date(); t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0);
+  openModal(`<h3>⏰ Отправить позже</h3><div class="modal-body">
+    <label class="field"><span>Сообщение</span><textarea id="scText" maxlength="10000">${esc(text)}</textarea></label>
+    <div class="presets"><button class="hbtn" data-in="60">Через час</button><button class="hbtn" data-tm="9">Завтра в 9:00</button><button class="hbtn" data-mon="1">В понедельник 9:00</button></div>
+    <label class="field"><span>Когда отправить</span><input id="scAt" type="datetime-local" value="${localInput(t)}"></label>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="scOk">Запланировать</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const at = root.querySelector('#scAt');
+    root.querySelector('[data-in]').onclick = () => { at.value = localInput(new Date(Date.now() + 3600e3)); };
+    root.querySelector('[data-tm]').onclick = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); at.value = localInput(d); };
+    root.querySelector('[data-mon]').onclick = () => { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); d.setHours(9, 0, 0, 0); at.value = localInput(d); };
+    root.querySelector('#scOk').onclick = async () => {
+      const txt = root.querySelector('#scText').value.trim(), when = new Date(at.value);
+      if (!txt) return root.querySelector('#mErr').textContent = 'Напишите сообщение';
+      if (!(when > new Date())) return root.querySelector('#mErr').textContent = 'Выберите время в будущем';
+      try {
+        check(await sb.from('sl_scheduled').insert({ user_id: state.me.id, chat: state.current, text: txt, reply_to: state.replyTo?.id || null, send_at: when.toISOString() }));
+        if (txt === $('#input').value.trim()) { $('#input').value = ''; autosize(); clearDraft(state.current); }
+        closeModal(); toast(`⏰ Сообщение уйдёт ${when.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`);
+        loadScheduledBar(state.current);
+      } catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+  });
+}
+async function loadScheduledBar(chat) {
+  const bar = $('#schedBar'); if (!bar) return;
+  const { data } = await sb.from('sl_scheduled').select('id, text, send_at').eq('chat', chat).order('send_at');
+  if (chat !== state.current) return;
+  const list = data || [];
+  if (!list.length) { bar.classList.add('hidden'); return; }
+  bar.innerHTML = `<span>⏰</span><div class="rb-text"><b>Запланировано: ${list.length}</b><span>${esc(list[0].text.slice(0, 80))} — ${new Date(list[0].send_at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></div>`;
+  bar.classList.remove('hidden');
+  bar.onclick = () => openModal(`<h3>⏰ Запланированные сообщения</h3><div class="modal-body">${list.map((x) => `<div class="person" style="cursor:default"><span style="flex:1;min-width:0"><b>${new Date(x.send_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}</b><div class="snip">${esc(x.text)}</div></span><button class="hbtn" data-unsched="${x.id}">Отменить</button></div>`).join('')}</div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`, (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    root.querySelectorAll('[data-unsched]').forEach((b) => b.onclick = async () => { await sb.from('sl_scheduled').delete().eq('id', Number(b.dataset.unsched)); b.closest('.person').remove(); loadScheduledBar(chat); });
+  });
+}
+function openRemind(m) {
+  const opt = (label, ms) => `<button class="hbtn" data-ms="${ms}">${label}</button>`;
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(9, 0, 0, 0);
+  openModal(`<h3>⏰ Напомнить мне</h3><div class="modal-body">
+    <p class="snip" style="margin-bottom:10px">${esc((m.text || (m.file ? '📎 ' + m.file.name : '')).slice(0, 160))}</p>
+    <div class="presets">${opt('Через 30 минут', 30 * 60e3)}${opt('Через час', 3600e3)}${opt('Через 3 часа', 3 * 3600e3)}${opt('Завтра в 9:00', tomorrow - Date.now())}</div>
+    <label class="field"><span>Или выберите время</span><input id="rmAt" type="datetime-local" value="${localInput(tomorrow)}"></label>
+    <div class="modal-err" id="mErr"></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="rmOk">Напомнить</button></div>`,
+  (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const save = async (when) => {
+      try { check(await sb.from('sl_reminders').insert({ user_id: state.me.id, message_id: m.id, chat: m.chat, remind_at: when.toISOString() })); closeModal();
+        toast(`⏰ Напомню ${when.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`); }
+      catch (e) { root.querySelector('#mErr').textContent = humanError(e); }
+    };
+    root.querySelectorAll('[data-ms]').forEach((b) => b.onclick = () => save(new Date(Date.now() + Number(b.dataset.ms))));
+    root.querySelector('#rmOk').onclick = () => { const d = new Date(root.querySelector('#rmAt').value); if (d > new Date()) save(d); else root.querySelector('#mErr').textContent = 'Выберите время в будущем'; };
+  });
+}
+
+// 5. Ветки обсуждений
+function onThreadReply(m) {
+  state.threadCounts.set(m.threadRoot, (state.threadCounts.get(m.threadRoot) || 0) + 1);
+  if (state.view === 'chat' && m.chat === state.current) rerenderMessage(m.threadRoot);
+  if (state.threadOpen === m.threadRoot) { appendThreadMsg(m); return; }
+  const root = findMsg(m.threadRoot);
+  if (m.userId !== state.me.id && root && root.userId === state.me.id && !isObserver(m.chat)) toast(`💬 ${userName(m.userId)} ответил(а) в ветке: ${(m.text || '').slice(0, 60)}`, () => { if (m.chat !== state.current) openChat(m.chat).then(() => openThread(m.threadRoot)); else openThread(m.threadRoot); });
+}
+function appendThreadMsg(m) {
+  const list = $('#thList'); if (!list) return;
+  if (list.querySelector(`[data-id="${m.id}"]`)) return;
+  list.querySelector('.empty')?.remove();
+  state.quoted.set(m.id, m);
+  list.insertAdjacentHTML('beforeend', messageHtml(m, null));
+  list.scrollTop = list.scrollHeight;
+  hydrateImages(list);
+}
+async function openThread(rootId) {
+  const root = findMsg(rootId) || msgFromRow(check(await sb.from('sl_messages').select('*').eq('id', rootId).single()));
+  state.threadOpen = rootId;
+  const obs = isObserver(root.chat);
+  openModal(`<h3>💬 Ветка обсуждения</h3><div class="modal-body thread-body">
+      <div class="thread-root">${messageHtml(root, null)}</div>
+      <div id="thList" class="thread-list"><p class="muted">Загрузка…</p></div>
+    </div>
+    ${obs ? '<div class="readonly-note">👁 Только просмотр</div>' : `<div class="thread-input"><textarea id="thInput" rows="1" placeholder="Ответить в ветке…"></textarea><button class="send-btn" id="thSend">➤</button></div>`}`,
+  async (rootEl) => {
+    const list = rootEl.querySelector('#thList');
+    const data = check(await sb.from('sl_messages').select('*').eq('thread_root', rootId).order('id'));
+    const msgs = data.map(msgFromRow);
+    msgs.forEach((m) => state.quoted.set(m.id, m)); state.quoted.set(root.id, root);
+    await loadExtras(msgs.length ? msgs : []);
+    list.innerHTML = msgs.length ? msgs.map((m, i) => messageHtml(m, msgs[i - 1])).join('') : '<div class="empty">Ответов пока нет — начните обсуждение</div>';
+    list.scrollTop = list.scrollHeight; hydrateImages(rootEl);
+    rootEl.addEventListener('click', (e) => {
+      const b = e.target.closest('.msg-acts button');
+      if (b) { e.stopPropagation(); const id = Number(b.closest('.msg').dataset.id); if (b.dataset.act === 'thread') return; return messageAction(b.dataset.act, id, b); }
+      const rb = e.target.closest('.react'); if (rb) return toggleReaction(Number(rb.closest('.msg').dataset.id), rb.dataset.emoji);
+      const cv = e.target.closest('video.circle'); if (cv) { cv.paused ? (cv.muted = false, cv.play().catch(() => {})) : cv.pause(); }
+      const card = e.target.closest('.file-card[data-path]'); if (card) { e.preventDefault(); downloadFile(card.dataset.path, card.dataset.name); }
+    });
+    const inp = rootEl.querySelector('#thInput');
+    if (!inp) return;
+    const send = async () => {
+      const text = inp.value.trim(); if (!text) return;
+      inp.value = '';
+      try { const row = check(await sb.from('sl_messages').insert({ chat: root.chat, user_id: state.me.id, text, thread_root: rootId }).select().single()); onMessage(msgFromRow(row)); }
+      catch (e) { inp.value = text; toast(humanError(e)); }
+    };
+    rootEl.querySelector('#thSend').onclick = send;
+    inp.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+    inp.focus();
+  }, 'wide thread');
+}
+
+// 6. Файлы, фото и ссылки чата
+async function openChatFiles(chat) {
+  openModal(`<h3>📁 Файлы, фото и ссылки</h3><div class="modal-body">
+    <div class="sp-tabs" style="margin-bottom:10px"><button data-ft="img" class="on">Фото</button><button data-ft="file">Файлы</button><button data-ft="voice">Голосовые</button><button data-ft="link">Ссылки</button></div>
+    <div id="ftBox"><p class="muted">Загрузка…</p></div></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+  async (root) => {
+    root.querySelector('[data-close]').onclick = closeModal;
+    const [fr, lr] = await Promise.all([
+      sb.from('sl_messages').select('*').eq('chat', chat).not('file', 'is', null).order('id', { ascending: false }).limit(300),
+      sb.from('sl_messages').select('*').eq('chat', chat).ilike('text', '%http%').order('id', { ascending: false }).limit(300),
+    ]);
+    const files = (fr.data || []).map(msgFromRow), links = (lr.data || []).map(msgFromRow);
+    const box = root.querySelector('#ftBox');
+    const draw = (t) => {
+      root.querySelectorAll('[data-ft]').forEach((b) => b.classList.toggle('on', b.dataset.ft === t));
+      if (t === 'img') { const imgs = files.filter((m) => isImage(m.file)); box.innerHTML = imgs.length ? `<div class="ft-grid">${imgs.map((m) => `<img class="img-preview" data-path="${esc(m.file.path)}" data-id="${m.id}" title="${esc(userName(m.userId))}, ${fmtDay(m.createdAt)}">`).join('')}</div>` : '<p class="muted">Фото нет</p>'; hydrateImages(box);
+        box.querySelectorAll('img').forEach((i) => i.onclick = () => { if (i.src) { $('#lightbox img').src = i.src; $('#lightbox').classList.remove('hidden'); } }); }
+      if (t === 'file') { const fl = files.filter((m) => !isImage(m.file) && !m.file.voice && !m.file.circle); box.innerHTML = fl.map((m) => `<div class="person" data-path="${esc(m.file.path)}" data-name="${esc(m.file.name)}"><span class="file-icon">${esc((m.file.name.split('.').pop() || '').slice(0, 4).toUpperCase())}</span><span style="flex:1;min-width:0"><b>${esc(m.file.name)}</b><div class="u-meta">${fmtSize(m.file.size)} · ${esc(userName(m.userId))} · ${fmtDay(m.createdAt)}</div></span><span>⬇</span></div>`).join('') || '<p class="muted">Файлов нет</p>';
+        box.querySelectorAll('[data-path]').forEach((el) => el.onclick = () => downloadFile(el.dataset.path, el.dataset.name)); }
+      if (t === 'voice') { const vs = files.filter((m) => m.file.voice || m.file.circle); box.innerHTML = vs.map((m) => `<div class="person" style="cursor:default"><span>${m.file.circle ? '⭕' : '🎤'}</span><span style="flex:1"><b>${esc(userName(m.userId))}</b><div class="u-meta">${fmtDay(m.createdAt)} ${fmtTime(m.createdAt)} · ${fmtDur(m.file.duration)}</div></span><button class="hbtn" data-jump="${m.id}">Открыть</button></div>`).join('') || '<p class="muted">Голосовых нет</p>';
+        box.querySelectorAll('[data-jump]').forEach((b) => b.onclick = () => { closeModal(); jumpTo(Number(b.dataset.jump), chat); }); }
+      if (t === 'link') { const out = []; links.forEach((m) => (m.text.match(/https?:\/\/[^\s<]+/g) || []).forEach((u) => out.push({ u, m })));
+        box.innerHTML = out.map(({ u, m }) => `<div class="person" style="cursor:default"><span>🔗</span><span style="flex:1;min-width:0"><a href="${esc(u)}" target="_blank" rel="noopener" style="word-break:break-all">${esc(u)}</a><div class="u-meta">${esc(userName(m.userId))} · ${fmtDay(m.createdAt)}</div></span></div>`).join('') || '<p class="muted">Ссылок нет</p>'; }
+    };
+    root.querySelectorAll('[data-ft]').forEach((b) => b.onclick = () => draw(b.dataset.ft));
+    draw('img');
+  }, 'wide');
+}
+
+// 8. Черновики (на всех устройствах)
+let draftTimer = null;
+function saveDraftSoon() { clearTimeout(draftTimer); const chat = state.current; draftTimer = setTimeout(() => flushDraft(chat), 900); }
+function flushDraft(chat) {
+  clearTimeout(draftTimer);
+  if (!chat || state.editing) return;
+  const text = chat === state.current ? $('#input').value : null;
+  if (text === null) return;
+  try { if (text.trim()) localStorage.setItem('sl-draft-' + chat, text); else localStorage.removeItem('sl-draft-' + chat); } catch {}
+  if (text.trim()) sb.from('sl_drafts').upsert({ user_id: state.me.id, chat, text, updated_at: new Date().toISOString() }).then(() => {}, () => {});
+  else sb.from('sl_drafts').delete().match({ user_id: state.me.id, chat }).then(() => {}, () => {});
+}
+function clearDraft(chat) {
+  try { localStorage.removeItem('sl-draft-' + chat); } catch {}
+  sb.from('sl_drafts').delete().match({ user_id: state.me.id, chat }).then(() => {}, () => {});
+}
+async function loadDraft(chat) {
+  if ($('#input').value.trim()) return;
+  let text = ''; try { text = localStorage.getItem('sl-draft-' + chat) || ''; } catch {}
+  if (!text) { const { data } = await sb.from('sl_drafts').select('text').match({ user_id: state.me.id, chat }).maybeSingle(); text = data?.text || ''; }
+  if (text && chat === state.current && !$('#input').value.trim()) { $('#input').value = text; autosize(); }
+}
+
+// 10. Видеосообщения-«кружочки»
+const circ = { mr: null, stream: null, chunks: [], started: 0, timer: null, cancel: false };
+async function startCircle() {
+  if (!window.MediaRecorder) return toast('Этот браузер не умеет записывать видео');
+  try { circ.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480 }, height: { ideal: 480 }, facingMode: 'user' }, audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) { return showMediaError(e, 'камеру'); }
+  const ov = document.createElement('div');
+  ov.id = 'circleRec';
+  ov.innerHTML = `<div class="circle-rec"><video autoplay muted playsinline></video><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" class="ring-bg"/><circle cx="50" cy="50" r="48" class="ring" id="crRing"/></svg></div>
+    <div class="circle-ctl"><span id="crTime">0:00</span><button class="secondary" id="crCancel">Отмена</button><button class="primary" id="crSend">Отправить ➤</button></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('video').srcObject = circ.stream;
+  const mime = ['video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm'].find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
+  circ.mr = new MediaRecorder(circ.stream, mime ? { mimeType: mime, videoBitsPerSecond: 600000 } : undefined);
+  circ.chunks = []; circ.cancel = false; circ.started = Date.now();
+  circ.mr.ondataavailable = (e) => e.data.size && circ.chunks.push(e.data);
+  circ.mr.onstop = () => {
+    circ.stream.getTracks().forEach((t) => t.stop()); clearInterval(circ.timer); ov.remove();
+    const dur = (Date.now() - circ.started) / 1000, type = (circ.mr.mimeType || 'video/webm').split(';')[0];
+    if (circ.cancel || dur < 1) return;
+    const file = new File(circ.chunks, `Видеосообщение.${/mp4/.test(type) ? 'mp4' : 'webm'}`, { type });
+    uploadFile(file, { circle: true, duration: Math.round(dur) });
+  };
+  circ.mr.start(1000);
+  const MAX = 60;
+  const tick = () => { const s = (Date.now() - circ.started) / 1000; ov.querySelector('#crTime').textContent = fmtDur(s); ov.querySelector('#crRing').style.strokeDashoffset = 301.6 * (1 - Math.min(1, s / MAX)); if (s >= MAX) circ.mr.stop(); };
+  tick(); circ.timer = setInterval(tick, 250);
+  ov.querySelector('#crCancel').onclick = () => { circ.cancel = true; circ.mr.stop(); };
+  ov.querySelector('#crSend').onclick = () => circ.mr.stop();
+}
 
 // ---------- Календарь ----------
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -3459,6 +3899,7 @@ function openDeepLink(hash) {
     return true;
   }
   if (key === 'tasks') { openTasks(); return true; }
+  if (key === 'msg' && value) { const [c, id] = decodeURIComponent(value).split(','); jumpTo(Number(id), c); return true; }
   if (key === 'ann') { openChat(state.current || `c:${state.channels[0]?.id}`); loadAnnouncements(); return true; }
   if (key === 'calendar') { openCalendar(); return true; }
   return false;

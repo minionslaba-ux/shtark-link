@@ -1,0 +1,1 @@
+-- v3 переписка: sl_messages.fwd/poll/thread_root/urgent; sl_poll_votes, sl_saved, sl_drafts, sl_scheduled, sl_reminders, sl_poll_close, sl_minute (cron каждую минуту). Применено миграцией shtark_link_v3_messaging.

@@ -126,6 +126,16 @@ async function onHook(b: any) {
     const text = n.text || (n.file ? '📎 ' + n.file.name : '');
     const title = await chatTitle(n.chat);
     const all = (await members(n.chat)).filter((id) => id !== n.user_id);
+    // ответ в ветке — только автору ветки и тем, кто в ней писал
+    if (n.thread_root) {
+      const { data: th } = await db.from('sl_messages').select('user_id').or(`id.eq.${n.thread_root},thread_root.eq.${n.thread_root}`);
+      const to = ([...new Set((th || []).map((r: any) => r.user_id as string))] as string[]).filter((id) => id !== n.user_id && all.includes(id));
+      return send(to, { title: `💬 ${author} в ветке${title ? ' · ' + title : ''}`, body: short(text), url: `/#msg=${n.chat},${n.thread_root}`, tag: `thread-${n.thread_root}` });
+    }
+    // срочное — всем участникам, даже в «Не беспокоить», не исчезает само
+    if (n.urgent) {
+      return send(all, { title: `❗ Срочно: ${author}${title ? ' · ' + title : ''}`, body: short(text), url: `/#chat=${n.chat}`, tag: `urgent-${n.id}`, urgency: 'high', requireInteraction: true }, { force: true });
+    }
     // упомянутым и тем, кому ответили — отдельное уведомление
     let direct: string[] = (n.mentions || []).filter((id: string) => all.includes(id));
     if (n.reply_to) {
