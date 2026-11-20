@@ -121,8 +121,12 @@ document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   $('#nameField').classList.toggle('hidden', authMode !== 'register');
   $('#inviteField').classList.toggle('hidden', authMode !== 'register');
   $('#authSubmit').textContent = authMode === 'login' ? 'Войти' : 'Зарегистрироваться';
+  // подсказка браузеру: при входе — подставить сохранённый пароль, при регистрации — предложить сохранить новый
+  $('[name=password]').setAttribute('autocomplete', authMode === 'login' ? 'current-password' : 'new-password');
   $('#authError').textContent = '';
 });
+// запоминаем последний логин, чтобы не вводить его заново
+try { const l = localStorage.getItem('lastLogin'); if (l) $('[name=login]').value = l; } catch {}
 $('#authForm').onsubmit = async (e) => {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target));
@@ -132,6 +136,7 @@ $('#authForm').onsubmit = async (e) => {
   try {
     if (authMode === 'register') await fn('sl-register', { login, name: f.name, password: f.password, invite: f.invite });
     check(await sb.auth.signInWithPassword({ email: login + EMAIL_DOMAIN, password: f.password }));
+    try { localStorage.setItem('lastLogin', login); } catch {}
     await start();
   } catch (err) {
     $('#authError').textContent = humanError(err);
