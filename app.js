@@ -2720,6 +2720,166 @@ window.addEventListener('online', () => { toast('Связь восстановл
 window.addEventListener('offline', () => toast('⚠ Нет подключения к интернету — сообщения будут ждать отправки'));
 
 // ===================== v3: помощник с ИИ =====================
+// ---------- Чтение .xlsx / .docx / .csv / .txt в браузере (для ИИ-помощника) ----------
+const AI_FILE_LIMIT = 30000; // символов текста файла, которые уходят помощнику
+async function unzipEntries(buf) { // { имя: Uint8Array } — распаковка ZIP (без сжатия и deflate)
+  const v = new DataView(buf), u8 = new Uint8Array(buf), dec = new TextDecoder();
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('Файл повреждён или это не документ Office');
+  const n = v.getUint16(eocd + 10, true);
+  let p = v.getUint32(eocd + 16, true);
+  const out = {};
+  for (let k = 0; k < n; k++) {
+    if (v.getUint32(p, true) !== 0x02014b50) break;
+    const method = v.getUint16(p + 10, true), csize = v.getUint32(p + 20, true);
+    const nl = v.getUint16(p + 28, true), el = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true), lo = v.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+    p += 46 + nl + el + cl;
+    const start = lo + 30 + v.getUint16(lo + 26, true) + v.getUint16(lo + 28, true);
+    out[name] = { method, data: u8.subarray(start, start + csize) };
+  }
+  return out;
+}
+async function unzipRead(entry) {
+  if (!entry) return '';
+  if (entry.method === 0) return new TextDecoder().decode(entry.data);
+  if (entry.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('Браузер не умеет распаковывать этот файл — обновите браузер');
+  const stream = new Blob([entry.data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return await new Response(stream).text();
+}
+const xmlDoc = (s) => new DOMParser().parseFromString(s, 'application/xml');
+const byTag = (el, tag) => [...el.getElementsByTagName('*')].filter((x) => x.localName === tag);
+const mdCell = (v) => String(v ?? '').replace(/\|/g, '/').replace(/\s*\n\s*/g, ' ').trim();
+const mdTable = (rows) => {
+  const w = Math.max(...rows.map((r) => r.length));
+  const line = (r) => '| ' + Array.from({ length: w }, (_, j) => mdCell(r[j])).join(' | ') + ' |';
+  return [line(rows[0]), '|' + ' --- |'.repeat(w), ...rows.slice(1).map(line)].join('\n');
+};
+async function readXlsxText(buf) {
+  const z = await unzipEntries(buf);
+  const shared = byTag(xmlDoc(await unzipRead(z['xl/sharedStrings.xml'])), 'si').map((si) => byTag(si, 't').map((t) => t.textContent).join(''));
+  const wb = xmlDoc(await unzipRead(z['xl/workbook.xml']));
+  const rels = xmlDoc(await unzipRead(z['xl/_rels/workbook.xml.rels']));
+  const relMap = Object.fromEntries(byTag(rels, 'Relationship').map((r) => [r.getAttribute('Id'), r.getAttribute('Target')]));
+  const colIdx = (ref) => { let n = 0; for (const ch of ref.replace(/\d+/g, '')) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+  const parts = [];
+  for (const sh of byTag(wb, 'sheet').slice(0, 10)) {
+    const rid = [...sh.attributes].find((a) => a.localName === 'id')?.value;
+    let target = relMap[rid] || ''; target = target.replace(/^\/?xl\//, '').replace(/^\//, '');
+    const doc = xmlDoc(await unzipRead(z['xl/' + target]));
+    const rows = [];
+    for (const r of byTag(doc, 'row')) {
+      const row = [];
+      for (const c of byTag(r, 'c')) {
+        const t = c.getAttribute('t'), vEl = byTag(c, 'v')[0];
+        const fEl = byTag(c, 'f')[0];
+        let val = t === 'inlineStr' ? byTag(c, 't').map((x) => x.textContent).join('') : vEl && vEl.textContent !== '' ? vEl.textContent : fEl ? '=' + fEl.textContent : '';
+        if (t === 's') val = shared[Number(val)] ?? '';
+        else if (t === 'b') val = val === '1' ? 'ДА' : 'НЕТ';
+        row[colIdx(c.getAttribute('r') || 'A')] = val;
+      }
+      rows.push(Array.from(row, (x) => x ?? ''));
+    }
+    while (rows.length && rows[rows.length - 1].every((x) => x === '')) rows.pop();
+    if (rows.length) parts.push(`Лист «${sh.getAttribute('name')}»:\n` + mdTable(rows));
+  }
+  return parts.join('\n\n') || '(пустая таблица)';
+}
+async function readDocxText(buf) {
+  const z = await unzipEntries(buf);
+  const doc = xmlDoc(await unzipRead(z['word/document.xml']));
+  const body = byTag(doc, 'body')[0];
+  if (!body) return '';
+  const pText = (p) => [...p.getElementsByTagName('*')].filter((x) => ['t', 'tab', 'br'].includes(x.localName)).map((x) => x.localName === 't' ? x.textContent : x.localName === 'tab' ? '\t' : '\n').join('');
+  const out = [];
+  for (const el of body.children) {
+    if (el.localName === 'p') {
+      const style = byTag(el, 'pStyle')[0]?.getAttribute('w:val') || '';
+      const txt = pText(el).trim();
+      if (!txt) continue;
+      const h = /heading\s*(\d)|заголовок\s*(\d)|^(\d)$/i.exec(style);
+      const list = byTag(el, 'numPr').length || /list|списо/i.test(style);
+      out.push(h ? '#'.repeat(Math.min(3, Number(h[1] || h[2] || h[3]))) + ' ' + txt : list ? '- ' + txt : txt);
+    } else if (el.localName === 'tbl') {
+      const rows = byTag(el, 'tr').map((tr) => byTag(tr, 'tc').map((tc) => byTag(tc, 'p').map(pText).join(' ')));
+      if (rows.length) out.push(mdTable(rows));
+    }
+  }
+  return out.join('\n\n');
+}
+async function readFileForAi(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (file.size > 15 * 1024 * 1024) throw new Error('Файл больше 15 МБ — для помощника слишком большой');
+  let text;
+  if (ext === 'xlsx' || ext === 'xlsm') text = await readXlsxText(await file.arrayBuffer());
+  else if (ext === 'docx') text = await readDocxText(await file.arrayBuffer());
+  else if (['txt', 'csv', 'md', 'tsv'].includes(ext)) {
+    text = await file.text();
+    if (ext === 'csv' || ext === 'tsv') {
+      const sep = ext === 'tsv' ? '\t' : (text.split('\n')[0].split(';').length > text.split('\n')[0].split(',').length ? ';' : ',');
+      const rows = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(sep).map((c) => c.replace(/^"|"$/g, '')));
+      if (rows.length) text = mdTable(rows);
+    }
+  } else if (ext === 'xls' || ext === 'doc') throw new Error('Старый формат .' + ext + ' не поддерживается — сохраните файл как .' + ext + 'x и прикрепите снова');
+  else throw new Error('Помощник читает файлы .xlsx, .docx, .csv и .txt');
+  text = String(text || '').trim();
+  if (!text) throw new Error('В файле не нашлось текста');
+  const cut = text.length > AI_FILE_LIMIT;
+  return { name: file.name, kind: ext.startsWith('xls') || ext === 'csv' || ext === 'tsv' ? 'table' : 'doc', text: cut ? text.slice(0, AI_FILE_LIMIT) : text, cut, size: text.length };
+}
+
+// ---------- Выгрузка ответа в Word (.docx) ----------
+function docxFromMarkdown(md, title = 'Документ') {
+  const x = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  const runs = (t, extra = '') => t.split(/(\*\*.+?\*\*)/g).filter(Boolean).map((part) => {
+    const b = /^\*\*.+\*\*$/.test(part); const txt = b ? part.slice(2, -2) : part;
+    return `<w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>${b ? '<w:b/>' : ''}${extra}</w:rPr><w:t xml:space="preserve">${x(txt)}</w:t></w:r>`;
+  }).join('');
+  const para = (t, { size = 22, bold = false, indent = 0, after = 120 } = {}) =>
+    `<w:p><w:pPr><w:spacing w:after="${after}"/>${indent ? `<w:ind w:left="${indent}" w:hanging="280"/>` : ''}</w:pPr>${runs(t, `${bold ? '<w:b/>' : ''}<w:sz w:val="${size}"/>`)}</w:p>`;
+  const lines = String(md).split('\n'), body = [];
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l), isSep = (l) => /^\s*\|?\s*:?-{2,}/.test(l) && !/[^\s|:-]/.test(l);
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (isRow(l) && isSep(lines[i + 1] || '')) {
+      const rows = [cells(l)]; i += 2;
+      while (i < lines.length && isRow(lines[i])) rows.push(cells(lines[i++]));
+      i--;
+      const w = rows[0].length, b = '<w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:color="999999"/><w:right w:val="single" w:sz="4" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/>';
+      body.push(`<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${b}</w:tblBorders></w:tblPr><w:tblGrid>${'<w:gridCol/>'.repeat(w)}</w:tblGrid>${rows.map((r, ri) => `<w:tr>${Array.from({ length: w }, (_, j) => `<w:tc><w:tcPr>${ri ? '' : '<w:shd w:val="clear" w:fill="EEEEEE"/>'}</w:tcPr>${para(r[j] ?? '', { bold: !ri, after: 0, size: 20 })}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`, para('', { after: 0 }));
+      continue;
+    }
+    const h = /^(#{1,3}) (.*)$/.exec(l);
+    if (h) body.push(para(h[2], { size: [0, 32, 28, 24][h[1].length], bold: true, after: 160 }));
+    else if (/^\s*[-*] /.test(l)) body.push(para('•\t' + l.replace(/^\s*[-*] /, ''), { indent: 560 }));
+    else if (/^\s*\d+[.)] /.test(l)) body.push(para(l.trim(), { indent: 560 }));
+    else if (l.trim()) body.push(para(l));
+  }
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1418" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const enc = new TextEncoder(), f = (name, str) => ({ name, data: enc.encode(str) });
+  const blob = zipStore([
+    f('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>'),
+    f('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>'),
+    f('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${x(title)}</dc:title><dc:creator>Shtark Link</dc:creator></cp:coreProperties>`),
+    f('word/document.xml', doc),
+  ]);
+  return new Blob([blob], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+function saveBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name.replace(/[\\/:*?"<>|]/g, ' ');
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function addAnswerTools(el, markdown, baseName) { // «Скачать в Word» и «Копировать» под ответом
+  const bar = document.createElement('div'); bar.className = 'ai-tools';
+  const w = document.createElement('button'); w.className = 'hbtn'; w.textContent = '⬇ Скачать в Word';
+  w.onclick = () => saveBlob(docxFromMarkdown(markdown, baseName), `${baseName} ${new Date().toLocaleDateString('ru-RU')}.docx`);
+  const c = document.createElement('button'); c.className = 'hbtn'; c.textContent = '📋 Копировать';
+  c.onclick = async () => { try { await navigator.clipboard.writeText(markdown.replace(/\*\*(.+?)\*\*/g, '$1')); toast('Скопировано'); } catch { toast('Не удалось скопировать'); } };
+  bar.append(w, c); el.appendChild(bar);
+}
+
 function openAiSummary(chat) { openAi(chat); }
 const aiHistory = []; // переписка с помощником — только в этой вкладке
 function openAi(chat) {
@@ -2729,9 +2889,12 @@ function openAi(chat) {
     ${chat ? `<div class="presets"><button class="hbtn" data-mode="missed">Кратко: что я пропустил${unread ? ` (${unread})` : ''}</button><button class="hbtn" data-mode="recent">Кратко: последние сообщения</button></div>` : ''}
     <div id="aiLog" class="ai-log"></div>
     <div class="ai-ask">
+      <button class="hbtn ai-clip" id="aiClip" title="Прикрепить файл: Excel (.xlsx), Word (.docx), .csv или .txt">📎</button>
+      <input type="file" id="aiFile" accept=".xlsx,.xlsm,.docx,.csv,.tsv,.txt,.md" hidden>
       <textarea id="aiQ" rows="2" maxlength="4000" placeholder="${chat ? 'Спросите о переписке или о чём угодно: «какие сроки обсуждали?», «составь ответ клиенту»…' : 'Напишите вопрос: составить письмо, посчитать, объяснить, придумать…'}"></textarea>
       <button class="primary" id="aiSend">Отправить</button>
     </div>
+    <div id="aiAtt" class="ai-att hidden"></div>
     ${chat ? '<label class="ai-ctx"><input type="checkbox" id="aiCtx" checked> учитывать переписку этого чата</label>' : ''}
   </div>
   <div class="modal-foot"><span class="muted" style="font-size:12px">Ответы составляет ИИ — проверяйте важное.</span><span class="spacer"></span>${aiHistory.length ? '<button class="hbtn" id="aiClear">Очистить</button>' : ''}<button class="primary" data-close>Закрыть</button></div>`,
@@ -2740,10 +2903,28 @@ function openAi(chat) {
     const busy = (on) => { send.disabled = on; root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = on); };
     const add = (role, html) => {
       const d = document.createElement('div'); d.className = 'ai-msg ' + role; d.innerHTML = html;
-      if (role === 'assistant') addExcelButtons(d);
       log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
     };
-    const render = () => { log.innerHTML = ''; aiHistory.forEach((m) => add(m.role, m.role === 'user' ? esc(m.content).replace(/\n/g, '<br>') : mdLite(m.content))); };
+    const userHtml = (m) => (m.file ? `<div class="ai-file">📎 ${esc(m.file)}</div>` : '') + esc(m.content).replace(/\n/g, '<br>');
+    const answer = (el, md, i) => { el.innerHTML = mdLite(md); addExcelButtons(el, aiBase(i)); addAnswerTools(el, md, aiBase(i)); log.scrollTop = log.scrollHeight; };
+    const aiBase = (i) => { const f = aiHistory[i - 1]?.file || state.aiFile?.name; return f ? f.replace(/\.[^.]+$/, '') + ' (ИИ)' : 'Ответ ИИ'; };
+    const render = () => { log.innerHTML = ''; aiHistory.forEach((m, i) => m.role === 'user' ? add('user', userHtml(m)) : answer(add('assistant', ''), m.content, i)); };
+    const att = root.querySelector('#aiAtt'), fileIn = root.querySelector('#aiFile');
+    const showAtt = () => {
+      const f = state.aiFile;
+      att.classList.toggle('hidden', !f);
+      att.innerHTML = f ? `<span>📎 <b>${esc(f.name)}</b> <span class="muted">${f.kind === 'table' ? 'таблица' : 'документ'}${f.cut ? ` · большой файл: помощник прочитает первые ${Math.round(AI_FILE_LIMIT / 1000)} тыс. символов из ${Math.round(f.size / 1000)} тыс.` : ''}</span></span><button class="hbtn" id="aiAttX" title="Убрать файл">✕</button>` : '';
+      if (f) { att.querySelector('#aiAttX').onclick = () => { state.aiFile = null; showAtt(); }; q.placeholder = f.kind === 'table' ? 'Что сделать с таблицей? «посчитай итоги по месяцам», «оставь только просроченные», «переведи на английский»…' : 'Что сделать с документом? «исправь ошибки», «сократи до одной страницы», «сделай официальнее»…'; }
+    };
+    root.querySelector('#aiClip').onclick = () => fileIn.click();
+    fileIn.onchange = async () => {
+      const file = fileIn.files[0]; fileIn.value = '';
+      if (!file) return;
+      att.classList.remove('hidden'); att.innerHTML = `<span class="muted">Читаю «${esc(file.name)}»…</span>`;
+      try { state.aiFile = await readFileForAi(file); showAtt(); q.focus(); }
+      catch (e) { state.aiFile = null; att.innerHTML = `<span class="modal-err">${esc(humanError(e))}</span>`; }
+    };
+    showAtt();
     render();
     if (!aiHistory.length) add('hint', chat ? '<p class="muted">Помощник может коротко пересказать переписку или ответить на ваш вопрос с учётом этого чата.</p>' : '<p class="muted">Задайте любой рабочий вопрос — помощник ответит здесь. Чтобы спросить о конкретной переписке, откройте чат и нажмите ✨.</p>');
     const wait = () => add('assistant', '<p class="muted"><span class="typing-dots"><i></i><i></i><i></i></span> Думаю…</p>');
@@ -2761,14 +2942,15 @@ function openAi(chat) {
       const question = q.value.trim();
       if (!question || send.disabled) return;
       log.querySelector('.hint')?.remove();
-      const history = aiHistory.slice(-10);
-      add('user', esc(question).replace(/\n/g, '<br>')); q.value = ''; busy(true);
+      const history = aiHistory.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+      const file = state.aiFile;
+      add('user', userHtml({ content: question, file: file?.name })); q.value = ''; busy(true);
       const w = wait();
       const useChat = chat && root.querySelector('#aiCtx')?.checked;
       try {
-        const r = await fn('sl-ai', { action: 'ask', question, history, chat: useChat ? chat : undefined });
-        w.innerHTML = mdLite(r.answer); addExcelButtons(w);
-        aiHistory.push({ role: 'user', content: question }, { role: 'assistant', content: r.answer });
+        const r = await fn('sl-ai', { action: 'ask', question, history, chat: useChat ? chat : undefined, attachment: file ? { name: file.name, kind: file.kind, text: file.text, cut: file.cut } : undefined });
+        aiHistory.push({ role: 'user', content: question, file: file?.name }, { role: 'assistant', content: r.answer });
+        answer(w, r.answer, aiHistory.length - 1);
       } catch (e) { w.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
       busy(false); q.focus();
     };
