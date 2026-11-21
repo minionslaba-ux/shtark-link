@@ -557,6 +557,7 @@ $('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
 $('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
 $('#navLook').onclick = () => { setSidebar(false); openAppearance(); };
 $('#navSaved').onclick = () => { setSidebar(false); openSaved(); };
+$('#navAi').onclick = () => { setSidebar(false); openAi(null); };
 $('#navAppr').onclick = () => { setSidebar(false); openApprovals(); };
 $('#navKb').onclick = () => { setSidebar(false); openKb(); };
 $('#navWork').onclick = () => toggleWorkday();
@@ -1128,7 +1129,7 @@ function renderChatHeader() {
   $('#readonlyNote').textContent = obs ? (chat.startsWith('d:') ? '👁 Личная переписка сотрудников — просмотр как администратор' : '👁 Вы не участник этого чата — просмотр как администратор') : '🔒 В этом канале пишут только администраторы';
   $('#readonlyNote').classList.toggle('hidden', !ro);
   document.querySelector('#chatView .input-row').classList.toggle('hidden', ro);
-  actions += `<button class="hbtn" id="aiBtn" title="Кратко: что обсуждали (помощник с ИИ)">✨ <span class="lbl">Кратко</span></button><button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
+  actions += `<button class="hbtn" id="aiBtn" title="Помощник с ИИ: кратко о переписке или свой вопрос">✨ <span class="lbl">ИИ</span></button><button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
   $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + ' ' + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
@@ -2647,22 +2648,60 @@ window.addEventListener('online', () => { toast('Связь восстановл
 window.addEventListener('offline', () => toast('⚠ Нет подключения к интернету — сообщения будут ждать отправки'));
 
 // ===================== v3: помощник с ИИ =====================
-function openAiSummary(chat) {
-  const unread = state.unread.get(chat) || 0;
-  openModal(`<h3>✨ Кратко: ${esc(chatTitle(chat))}</h3><div class="modal-body">
-    <div class="presets"><button class="hbtn" data-mode="missed">Что я пропустил${unread ? ` (${unread})` : ''}</button><button class="hbtn" data-mode="recent">Последние сообщения</button></div>
-    <div id="aiOut" class="kb-body"><p class="muted">Помощник прочитает переписку и коротко перескажет главное: решения, задачи, открытые вопросы.</p></div></div>
-    <div class="modal-foot"><span class="muted" style="font-size:12px">Краткое содержание составляет ИИ — проверяйте важное в самой переписке.</span><span class="spacer"></span><button class="primary" data-close>Закрыть</button></div>`,
+function openAiSummary(chat) { openAi(chat); }
+const aiHistory = []; // переписка с помощником — только в этой вкладке
+function openAi(chat) {
+  const unread = chat ? (state.unread.get(chat) || 0) : 0;
+  const title = chat ? `✨ ИИ: ${esc(chatTitle(chat))}` : '✨ Спросить ИИ';
+  openModal(`<h3>${title}</h3><div class="modal-body">
+    ${chat ? `<div class="presets"><button class="hbtn" data-mode="missed">Кратко: что я пропустил${unread ? ` (${unread})` : ''}</button><button class="hbtn" data-mode="recent">Кратко: последние сообщения</button></div>` : ''}
+    <div id="aiLog" class="ai-log"></div>
+    <div class="ai-ask">
+      <textarea id="aiQ" rows="2" maxlength="4000" placeholder="${chat ? 'Спросите о переписке или о чём угодно: «какие сроки обсуждали?», «составь ответ клиенту»…' : 'Напишите вопрос: составить письмо, посчитать, объяснить, придумать…'}"></textarea>
+      <button class="primary" id="aiSend">Отправить</button>
+    </div>
+    ${chat ? '<label class="ai-ctx"><input type="checkbox" id="aiCtx" checked> учитывать переписку этого чата</label>' : ''}
+  </div>
+  <div class="modal-foot"><span class="muted" style="font-size:12px">Ответы составляет ИИ — проверяйте важное.</span><span class="spacer"></span>${aiHistory.length ? '<button class="hbtn" id="aiClear">Очистить</button>' : ''}<button class="primary" data-close>Закрыть</button></div>`,
   (root) => {
+    const log = root.querySelector('#aiLog'), q = root.querySelector('#aiQ'), send = root.querySelector('#aiSend');
+    const busy = (on) => { send.disabled = on; root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = on); };
+    const add = (role, html) => {
+      const d = document.createElement('div'); d.className = 'ai-msg ' + role; d.innerHTML = html;
+      log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+    };
+    const render = () => { log.innerHTML = ''; aiHistory.forEach((m) => add(m.role, m.role === 'user' ? esc(m.content).replace(/\n/g, '<br>') : mdLite(m.content))); };
+    render();
+    if (!aiHistory.length) add('hint', chat ? '<p class="muted">Помощник может коротко пересказать переписку или ответить на ваш вопрос с учётом этого чата.</p>' : '<p class="muted">Задайте любой рабочий вопрос — помощник ответит здесь. Чтобы спросить о конкретной переписке, откройте чат и нажмите ✨.</p>');
+    const wait = () => add('assistant', '<p class="muted"><span class="typing-dots"><i></i><i></i><i></i></span> Думаю…</p>');
     root.querySelector('[data-close]').onclick = closeModal;
+    const clr = root.querySelector('#aiClear');
+    if (clr) clr.onclick = () => { aiHistory.length = 0; render(); clr.remove(); };
     root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = async () => {
-      const out = root.querySelector('#aiOut');
-      root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = true);
-      out.innerHTML = '<p class="muted"><span class="typing-dots"><i></i><i></i><i></i></span> Читаю переписку…</p>';
-      try { const r = await fn('sl-ai', { action: 'summary', chat, mode: b.dataset.mode }); out.innerHTML = mdLite(r.summary) + `<p class="muted" style="font-size:12px">По ${r.count} ${plural(r.count, 'сообщению', 'сообщениям', 'сообщениям')}</p>`; }
-      catch (e) { out.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
-      root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = false);
+      busy(true); log.querySelector('.hint')?.remove();
+      const w = wait();
+      try { const r = await fn('sl-ai', { action: 'summary', chat, mode: b.dataset.mode }); w.innerHTML = mdLite(r.summary) + `<p class="muted" style="font-size:12px">Кратко по ${r.count} ${plural(r.count, 'сообщению', 'сообщениям', 'сообщениям')}</p>`; }
+      catch (e) { w.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
+      busy(false);
     });
+    const ask = async () => {
+      const question = q.value.trim();
+      if (!question || send.disabled) return;
+      log.querySelector('.hint')?.remove();
+      const history = aiHistory.slice(-10);
+      add('user', esc(question).replace(/\n/g, '<br>')); q.value = ''; busy(true);
+      const w = wait();
+      const useChat = chat && root.querySelector('#aiCtx')?.checked;
+      try {
+        const r = await fn('sl-ai', { action: 'ask', question, history, chat: useChat ? chat : undefined });
+        w.innerHTML = mdLite(r.answer);
+        aiHistory.push({ role: 'user', content: question }, { role: 'assistant', content: r.answer });
+      } catch (e) { w.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
+      busy(false); q.focus();
+    };
+    send.onclick = ask;
+    q.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } };
+    setTimeout(() => q.focus(), 50);
   }, 'wide');
 }
 
