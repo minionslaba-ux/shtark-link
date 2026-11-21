@@ -2444,16 +2444,88 @@ async function openApproval(id) {
 }
 
 // База знаний
-function mdLite(text) { // простая разметка: # заголовки, **жирный**, списки, ссылки
-  return esc(text).split('\n').map((l) => {
-    if (/^### /.test(l)) return `<h4>${l.slice(4)}</h4>`;
-    if (/^## /.test(l)) return `<h3>${l.slice(3)}</h3>`;
-    if (/^# /.test(l)) return `<h2>${l.slice(2)}</h2>`;
-    if (/^[-*] /.test(l)) return `<li>${l.slice(2)}</li>`;
-    return l ? `<p>${l}</p>` : '';
-  }).join('').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(<li>.*?<\/li>)+/g, (m) => `<ul>${m}</ul>`)
+function mdLite(text) { // простая разметка: # заголовки, **жирный**, списки, ссылки, таблицы | a | b |
+  const inline = (x) => x.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
     .replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim()));
+  const lines = esc(text).split('\n'), out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (isRow(l) && i + 1 < lines.length && isSep(lines[i + 1])) { // таблица
+      const head = cells(l), rows = [];
+      i += 2;
+      while (i < lines.length && isRow(lines[i])) rows.push(cells(lines[i++]));
+      i--;
+      out.push(`<div class="md-table-wrap"><table class="md-table"><thead><tr>${head.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${head.map((_, j) => `<td>${r[j] ?? ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^### /.test(l)) out.push(`<h4>${inline(l.slice(4))}</h4>`);
+    else if (/^## /.test(l)) out.push(`<h3>${inline(l.slice(3))}</h3>`);
+    else if (/^# /.test(l)) out.push(`<h2>${inline(l.slice(2))}</h2>`);
+    else if (/^\s*[-*] /.test(l)) out.push(`<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`);
+    else if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+  }
+  return out.join('').replace(/(<li>.*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
 }
+
+// ---------- Выгрузка таблицы в Excel (.xlsx без сторонних библиотек) ----------
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(files) { // ZIP без сжатия: [{ name, data: Uint8Array }]
+  const enc = new TextEncoder(), parts = [], central = [];
+  let off = 0;
+  const u16 = (v) => [v & 255, (v >>> 8) & 255], u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+    const head = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(n), ...u32(n), ...u16(name.length), ...u16(0)]);
+    parts.push(head, name, f.data);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(n), ...u32(n), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), name);
+    off += head.length + name.length + n;
+  }
+  const cdSize = central.reduce((a, b) => a + b.length, 0);
+  const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(off), ...u16(0)]);
+  return new Blob([...parts, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+function xlsxFromRows(rows, sheetName = 'Таблица') { // первая строка — заголовок (жирным)
+  const x = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  const col = (i) => { let s = ''; for (i++; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+  const num = (v) => { // «1 500,50», «15000», «-3.5» → число; проценты и даты остаются текстом
+    const t = String(v).replace(/[\s ]/g, '').replace(/(руб\.?|₽)$/i, '');
+    if (!/^-?\d+([.,]\d+)?$/.test(t) || /^0\d/.test(t)) return null;
+    return Number(t.replace(',', '.'));
+  };
+  const width = rows[0].map((_, j) => Math.min(60, Math.max(8, ...rows.map((r) => String(r[j] ?? '').length + 2))));
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${width.map((w, j) => `<col min="${j + 1}" max="${j + 1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${rows.map((r, i) => `<row r="${i + 1}">${r.map((v, j) => {
+    const ref = `${col(j)}${i + 1}`, n = i ? num(v) : null;
+    return n !== null ? `<c r="${ref}"><v>${n}</v></c>` : `<c r="${ref}" t="inlineStr"${i ? '' : ' s="1"'}><is><t xml:space="preserve">${x(v ?? '')}</t></is></c>`;
+  }).join('')}</row>`).join('')}</sheetData></worksheet>`;
+  const enc = new TextEncoder(), f = (name, str) => ({ name, data: enc.encode(str) });
+  return zipStore([
+    f('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
+    f('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
+    f('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${x(sheetName.slice(0, 31).replace(/[\\/?*[\]:]/g, ' '))}" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+    f('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+    f('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'),
+    f('xl/worksheets/sheet1.xml', sheet),
+  ]);
+}
+function addExcelButtons(root, baseName = 'Таблица') { // кнопка «Скачать в Excel» под каждой таблицей
+  root.querySelectorAll('.md-table-wrap').forEach((w, k) => {
+    if (w.nextElementSibling?.classList.contains('md-xlsx')) return;
+    const b = document.createElement('button');
+    b.className = 'hbtn md-xlsx'; b.textContent = '⬇ Скачать в Excel';
+    b.onclick = () => {
+      const rows = [...w.querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+      const name = `${baseName}${k ? ' ' + (k + 1) : ''} ${new Date().toLocaleDateString('ru-RU')}.xlsx`.replace(/[\\/:*?"<>|]/g, ' ');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(xlsxFromRows(rows, baseName)); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    };
+    w.after(b);
+  });
+}
+
 async function openKb(q = '') {
   let rows = [];
   try { rows = check(await sb.from('sl_kb').select('id, title, category, updated_at, updated_by, created_by').order('category').order('title')); } catch (e) { return toast(humanError(e)); }
@@ -2668,6 +2740,7 @@ function openAi(chat) {
     const busy = (on) => { send.disabled = on; root.querySelectorAll('[data-mode]').forEach((x) => x.disabled = on); };
     const add = (role, html) => {
       const d = document.createElement('div'); d.className = 'ai-msg ' + role; d.innerHTML = html;
+      if (role === 'assistant') addExcelButtons(d);
       log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
     };
     const render = () => { log.innerHTML = ''; aiHistory.forEach((m) => add(m.role, m.role === 'user' ? esc(m.content).replace(/\n/g, '<br>') : mdLite(m.content))); };
@@ -2680,7 +2753,7 @@ function openAi(chat) {
     root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = async () => {
       busy(true); log.querySelector('.hint')?.remove();
       const w = wait();
-      try { const r = await fn('sl-ai', { action: 'summary', chat, mode: b.dataset.mode }); w.innerHTML = mdLite(r.summary) + `<p class="muted" style="font-size:12px">Кратко по ${r.count} ${plural(r.count, 'сообщению', 'сообщениям', 'сообщениям')}</p>`; }
+      try { const r = await fn('sl-ai', { action: 'summary', chat, mode: b.dataset.mode }); w.innerHTML = mdLite(r.summary) + `<p class="muted" style="font-size:12px">Кратко по ${r.count} ${plural(r.count, 'сообщению', 'сообщениям', 'сообщениям')}</p>`; addExcelButtons(w); }
       catch (e) { w.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
       busy(false);
     });
@@ -2694,7 +2767,7 @@ function openAi(chat) {
       const useChat = chat && root.querySelector('#aiCtx')?.checked;
       try {
         const r = await fn('sl-ai', { action: 'ask', question, history, chat: useChat ? chat : undefined });
-        w.innerHTML = mdLite(r.answer);
+        w.innerHTML = mdLite(r.answer); addExcelButtons(w);
         aiHistory.push({ role: 'user', content: question }, { role: 'assistant', content: r.answer });
       } catch (e) { w.innerHTML = `<p class="modal-err">${esc(humanError(e))}</p>`; }
       busy(false); q.focus();
