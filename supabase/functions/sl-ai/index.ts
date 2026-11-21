@@ -92,7 +92,11 @@ async function askYandex(yKey: string, yFolder: string, messages: Msg[]): Promis
       messages: messages.map((m) => ({ role: m.role, text: m.content })),
     }),
   });
-  if (r.status === 401 || r.status === 403) throw new Error('YandexGPT не принял ключ: проверьте YANDEX_API_KEY, YANDEX_FOLDER_ID и роль ai.languageModels.user у сервисного аккаунта.');
+  if (r.status === 401 || r.status === 403) {
+    const detail = (await r.text()).slice(0, 300);
+    console.log('yandex auth', r.status, detail, 'key len', yKey.length, 'folder', yFolder.slice(0, 4) + '…' + yFolder.length);
+    throw new Error(`YandexGPT не принял ключ (${r.status}): проверьте YANDEX_API_KEY, YANDEX_FOLDER_ID и роль ai.languageModels.user у сервисного аккаунта.`);
+  }
   if (r.status === 429) throw new Error('YandexGPT: слишком много запросов — попробуйте через минуту.');
   if (!r.ok) throw new Error(`YandexGPT ответил ошибкой ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const out = await r.json();
