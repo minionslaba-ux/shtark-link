@@ -3792,11 +3792,19 @@ async function openAdmin() {
   renderSidebar();
   renderAdmin();
 }
-let adminUsers = [];
+let adminUsers = [], adminPush = new Map();
+// где у сотрудника включены уведомления
+function pushBadge(u) {
+  const p = adminPush.get(u.id);
+  if (!p || !p.subs) return '<span class="push-tag off" title="Сотрудник не включил уведомления ни на одном устройстве — сообщения и звонки он увидит, только открыв приложение">🔕 уведомления не включены</span>';
+  const where = [p.apple ? 'iPhone/Mac' : '', p.android_chrome ? 'Android/Chrome' : '', p.other ? 'другой браузер' : ''].filter(Boolean).join(', ');
+  return `<span class="push-tag ${p.failing ? 'warn' : 'on'}" title="${p.failing ? 'Часть устройств не принимает уведомления — пусть сотрудник заново включит их в приложении' : 'Уведомления включены'}">🔔 ${where}${p.failing ? ' · есть сбои' : ''}</span>`;
+}
 async function renderAdmin() {
   try {
-    const [info, list] = await Promise.all([rpc('sl_admin_info'), fn('sl-admin', { action: 'list' })]);
+    const [info, list, pstats] = await Promise.all([rpc('sl_admin_info'), fn('sl-admin', { action: 'list' }), rpc('sl_admin_push_stats').catch(() => [])]);
     adminUsers = list.users;
+    adminPush = new Map((pstats || []).map((r) => [r.user_id, r]));
     renderInvite(info);
   } catch (e) { $('#adminUsers').innerHTML = `<div class="modal-err">${esc(humanError(e))}</div>`; return; }
   const active = adminUsers.filter((u) => !u.disabled).length;
@@ -3811,6 +3819,7 @@ async function renderAdmin() {
           ${u.is_admin ? '<span class="tag shared">администратор</span>' : ''}
           ${u.disabled ? '<span class="tag" style="background:#fee2e2;color:#b91c1c">отключён</span>' : ''}</div>
         <div class="u-meta">${u.position ? `<b>${esc(u.position)}</b> · ` : '<span style="color:#d97706">должность не указана</span> · '}логин: <b>${esc(u.login)}</b> · ${u.disabled ? 'доступ закрыт' : seen(u)}</div>
+        ${u.disabled ? '' : `<div class="u-meta">${pushBadge(u)}</div>`}
       </div>
       <div class="u-actions">
         ${u.disabled
@@ -4702,6 +4711,28 @@ window.addEventListener('hashchange', () => {
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const pushSupported = () => window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isAndroid = /Android/i.test(navigator.userAgent);
+// встроенные браузеры мессенджеров и соцсетей: в них push-уведомления не работают в принципе
+const inAppBrowser = (() => {
+  const ua = navigator.userAgent;
+  const m = /MicroMessenger|WeChat|Weixin|Telegram|WhatsApp|FBAN|FBAV|FB_IAB|Instagram|Line\/|VKClient|vkontakte|OKApp|YaBrowser\/.+ (?:SA|TB)\/|GSA\//i.exec(ua);
+  if (m) return m[0].replace(/\/.*$/, '');
+  if (isAndroid && /; wv\)/.test(ua)) return 'встроенный браузер';
+  return '';
+})();
+function showInAppBanner() {
+  if (!inAppBrowser || document.getElementById('inappBar')) return;
+  const url = location.origin + location.pathname;
+  const intent = `intent://${location.host}${location.pathname}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+  const bar = document.createElement('div'); bar.id = 'inappBar'; bar.className = 'inapp-bar';
+  bar.innerHTML = `<div class="ib-text"><b>Откройте Shtark Link в ${isIOS ? 'Safari' : 'Chrome'}.</b> Сейчас он открыт внутри другого приложения — здесь не приходят уведомления о сообщениях и звонках.${isIOS ? ' Нажмите «⋯» или значок компаса и выберите «Открыть в Safari».' : ''}</div>
+    <div class="ib-btns">${isAndroid ? `<a class="primary" href="${intent}">Открыть в Chrome</a>` : ''}<button class="secondary" id="ibCopy">Скопировать ссылку</button></div>`;
+  document.body.prepend(bar);
+  bar.querySelector('#ibCopy').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована — вставьте её в Chrome'); } catch { prompt('Скопируйте ссылку и откройте её в браузере:', url); } };
+}
+showInAppBanner();
+// крупное приглашение включить уведомления (наверху экрана, а не внутри бокового меню)
+const pushAskLater = () => { try { return Number(localStorage.getItem('pushAskAfter') || 0) > Date.now(); } catch { return false; } };
 
 async function initPush() {
   if ('serviceWorker' in navigator && window.isSecureContext) {
@@ -4721,9 +4752,26 @@ function renderPushState() {
   const on = pushEnabled();
   $('#bellBtn').classList.toggle('off', !on);
   $('#bellBtn').title = on ? 'Уведомления включены' : 'Уведомления выключены';
-  const dismissed = localStorage.getItem('pushPromptDismissed') === '1';
-  const canAsk = (pushSupported() && Notification.permission !== 'denied') || (isIOS && !isStandalone);
-  $('#pushPrompt').classList.toggle('hidden', on || dismissed || !canAsk);
+  const dismissed = pushAskLater();
+  const canAsk = !inAppBrowser && ((pushSupported() && Notification.permission !== 'denied') || (isIOS && !isStandalone));
+  $('#pushPrompt').classList.toggle('hidden', on || !canAsk);
+  let top = $('#pushTop');
+  const blocked = pushSupported() && Notification.permission === 'denied';
+  const show = !on && !dismissed && !inAppBrowser && (canAsk || blocked) && state.me;
+  if (!show) { top?.remove(); return; }
+  if (top) return;
+  top = document.createElement('div'); top.id = 'pushTop'; top.className = 'push-top';
+  const ios = isIOS && !isStandalone, howto = ios || blocked;
+  top.innerHTML = `<span class="pt-ico">${ico('bell')}</span><div class="pt-text"><b>${blocked ? 'Уведомления заблокированы' : 'Включите уведомления'}</b><span>${ios ? 'На iPhone для этого нужно добавить Shtark Link на экран «Домой» — покажем как.' : blocked ? 'Браузер запретил их для Shtark Link — без них не придут сообщения и звонки. Покажем, как разрешить.' : 'Иначе вы не узнаете о новых сообщениях, задачах и звонках, пока приложение закрыто.'}</span></div>
+    <button class="primary" id="ptOn">${howto ? 'Как включить' : 'Включить'}</button><button class="pt-x" id="ptX" title="Напомнить позже">${ico('x')}</button>`;
+  $('#main').prepend(top);
+  top.querySelector('#ptX').onclick = () => { try { localStorage.setItem('pushAskAfter', String(Date.now() + 3 * 864e5)); } catch {} top.remove(); };
+  top.querySelector('#ptOn').onclick = async () => {
+    if (howto) return openPushSettings();
+    const b = top.querySelector('#ptOn'); b.disabled = true; b.textContent = 'Включаю…';
+    try { await enablePush(); toast('🔔 Уведомления включены'); }
+    catch (e) { b.disabled = false; b.textContent = 'Включить'; openPushSettings(); toast(humanError(e)); }
+  };
 }
 async function enablePush() {
   if (!pushSupported()) throw new Error('Этот браузер или адрес не поддерживает push-уведомления');
@@ -4766,7 +4814,14 @@ function openPushSettings() {
   } else if (!pushSupported()) {
     status = `<div class="push-status warn">Этот браузер не поддерживает push-уведомления. Попробуйте Chrome, Edge, Firefox или Safari.</div>`;
   } else if (Notification.permission === 'denied') {
-    status = `<div class="push-status warn">Уведомления запрещены в настройках браузера для этого сайта. Нажмите на значок замка 🔒 слева от адреса → «Уведомления» → «Разрешить», затем обновите страницу.</div>`;
+    status = `<div class="push-status warn">Уведомления запрещены в настройках браузера для Shtark Link.</div>`;
+    body = isAndroid
+      ? `<ol class="howto"><li>Нажмите на значок слева от адреса сайта (замок или ползунки) → <b>«Разрешения»</b> или <b>«Настройки сайта»</b>.</li>
+          <li>Откройте <b>«Уведомления»</b> и выберите <b>«Разрешить»</b>.</li>
+          <li>Если приложение установлено на экран: долгое нажатие на иконку Shtark Link → <b>«О приложении»</b> → <b>«Уведомления»</b> → включить.</li>
+          <li>Вернитесь сюда, обновите страницу и снова нажмите 🔔.</li></ol>
+          <p style="font-size:13px;color:var(--muted)">Также проверьте: в настройках телефона → Приложения → Chrome → Уведомления должны быть включены, а режим «Не беспокоить» — выключен.</p>`
+      : `<ol class="howto"><li>Нажмите на значок замка 🔒 слева от адреса → <b>«Уведомления»</b> → <b>«Разрешить»</b>.</li><li>Обновите страницу.</li></ol>`;
   } else if (pushEnabled()) {
     status = `<div class="push-status ok">✓ Уведомления включены на этом устройстве.</div>`;
     body = `<p style="font-size:14px;margin:0 0 8px">Вы будете получать уведомления о новых сообщениях, задачах, комментариях и звонках, когда Shtark Link закрыт.</p>`;

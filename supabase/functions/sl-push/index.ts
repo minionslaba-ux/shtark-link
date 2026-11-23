@@ -84,8 +84,9 @@ async function send(userIds: string[], p: Payload, { force = false } = {}) {
     const mark = (status: number, error: string | null) =>
       db.from('sl_push_subs').update({ last_status: status, last_error: error, last_at: new Date().toISOString() }).eq('endpoint', s.endpoint);
     try {
+      // высокий приоритет для всех: с «normal» Android в спящем режиме (Doze) копит уведомления и выдаёт пачкой через минуты и часы
       const r = await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body,
-        { TTL: p.ttl ?? 86400, urgency: (p.urgency as 'normal') || 'normal' });
+        { TTL: p.ttl ?? 86400, urgency: (p.urgency as 'high') || 'high' });
       sent++;
       await mark(r.statusCode, null);
     } catch (e) {
