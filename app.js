@@ -184,6 +184,61 @@ const userName = (id) => state.users.get(id)?.name || 'Сотрудник';
 const activeUsers = () => [...state.users.values()].filter((u) => !u.disabled);
 
 // Понятные сообщения вместо технических
+// ---------- Иконки (единый линейный набор вместо эмодзи в меню, шапке и строке ввода) ----------
+const ICONS = {
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  tasks: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  approve: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/>',
+  sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+  play: '<circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/>',
+  stop: '<circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>',
+  palette: '<path d="M12 2a10 10 0 0 0 0 20c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16a6 6 0 0 0 6-6c0-4.9-4.5-8.6-10-8.6z"/><circle cx="7.5" cy="11.5" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  search: '<circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.6-4.6"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+  menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/>',
+  send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/>',
+  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 10.76V6h6v4.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z"/><path d="M8 2h8"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+};
+const ico = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+function applyIcons(root = document) { root.querySelectorAll('[data-ico]').forEach((el) => { if (!el.querySelector('svg.i')) el.insertAdjacentHTML('afterbegin', ico(el.dataset.ico)); }); }
+applyIcons();
+// красивое пустое состояние: иконка, заголовок, пояснение, кнопка
+const emptyState = (icon, title, text = '', btn = '') => `<div class="empty-state"><div class="es-ico">${ico(icon)}</div><div class="es-title">${title}</div>${text ? `<div class="es-text">${text}</div>` : ''}${btn}</div>`;
+// всплывающее меню у кнопки: items — [{ icon, label, fn }]
+function popMenu(anchor, items) {
+  document.querySelector('.pop-menu')?.remove();
+  const m = document.createElement('div'); m.className = 'pop-menu';
+  m.innerHTML = items.map((it, i) => `<button data-i="${i}">${ico(it.icon)}<span>${it.label}</span></button>`).join('');
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.top = Math.min(r.bottom + 6, innerHeight - m.offsetHeight - 8) + 'px';
+  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8)) + 'px';
+  m.querySelectorAll('[data-i]').forEach((b) => b.onclick = () => { m.remove(); items[Number(b.dataset.i)].fn(); });
+  setTimeout(() => document.addEventListener('pointerdown', function off(e) { if (!m.contains(e.target)) { m.remove(); document.removeEventListener('pointerdown', off); } }), 0);
+}
+// раздел «Ещё» в левом меню (свёрнут по умолчанию, состояние запоминается)
+function setNavMore(open) {
+  $('#navMore').classList.toggle('open', open); $('#navMoreList').classList.toggle('open', open);
+  try { localStorage.setItem('sl-nav-more', open ? '1' : ''); } catch { /* приватный режим */ }
+}
+
 function humanError(e) {
   const m = String(e?.message || e || 'Ошибка');
   if (/Invalid login credentials/i.test(m)) return 'Неверный логин или пароль';
@@ -380,8 +435,9 @@ function openMyProfile() {
       <button class="secondary" type="button" id="logoutAll" style="margin-top:6px">Выйти на всех устройствах</button>
       <div class="modal-err" id="mErr"></div>
     </div>
-    <div class="modal-foot"><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pfSave">Сохранить</button></div>`,
+    <div class="modal-foot"><button class="secondary danger-link" id="pfLogout">${ico('logout')} Выйти</button><span class="spacer"></span><button class="secondary" data-close>Отмена</button><button class="primary" id="pfSave">Сохранить</button></div>`,
   (root) => {
+      root.querySelector('#pfLogout').onclick = () => { closeModal(); logout(); };
     root.querySelector('[data-close]').onclick = closeModal;
     mountAvatarEditor(root, me.id);
     loadDevices(root);
@@ -557,6 +613,9 @@ $('#navPeople').onclick = () => { setSidebar(false); openDirectory(); };
 $('#navCalls').onclick = () => { setSidebar(false); openCallHistory(); };
 $('#navLook').onclick = () => { setSidebar(false); openAppearance(); };
 $('#navSaved').onclick = () => { setSidebar(false); openSaved(); };
+$('#navMore').onclick = () => setNavMore(!$('#navMore').classList.contains('open'));
+try { setNavMore(localStorage.getItem('sl-nav-more') === '1'); } catch { setNavMore(false); }
+$('#meAv').onclick = () => openMyProfile();
 $('#navAi').onclick = () => { setSidebar(false); openAi(null); };
 $('#navAppr').onclick = () => { setSidebar(false); openApprovals(); };
 $('#navKb').onclick = () => { setSidebar(false); openKb(); };
@@ -591,6 +650,7 @@ async function start() {
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#meName').textContent = state.me.name;
+  $('#meAv').innerHTML = avatar(state.users.get(state.me.id) || state.me, 'sm');
   $('#navAdmin').classList.toggle('hidden', !state.me.isAdmin);
   $('#newChannelBtn').classList.toggle('hidden', !state.me.isAdmin);
 
@@ -1104,21 +1164,21 @@ function renderChatHeader() {
   let actions = '';
   const n = callCount(chat);
   const callBtn = call.chat === chat ? ''
-    : n ? `<button class="hbtn" id="callBtn" style="border-color:#22c55e;color:#16a34a">📞 <span class="lbl">Присоединиться</span> (${n})</button>`
-    : `<button class="hbtn" id="callBtn" title="Голосовой звонок">📞 <span class="lbl">${chat.startsWith('d:') ? 'Позвонить' : 'Созвон'}</span></button>`;
+    : n ? `<button class="hbtn call-live" id="callBtn" title="Присоединиться к звонку">${ico('phone')}<span class="lbl">Присоединиться</span> <b>${n}</b></button>`
+    : `<button class="hbtn" id="callBtn" title="Голосовой звонок">${ico('phone')}<span class="lbl">${chat.startsWith('d:') ? 'Позвонить' : 'Созвон'}</span></button>`;
   if (chat.startsWith('c:')) {
     const c = state.channels.find((x) => `c:${x.id}` === chat);
-    if (c) { const n = chatMembers(chat).length; actions = `<button class="hbtn" id="chanBtn" title="Участники канала">👥 <span class="lbl">${c.isPublic ? 'Для всех' : n + ' ' + plural(n, 'участник', 'участника', 'участников')}</span></button>`; }
+    if (c) { const n = chatMembers(chat).length; actions = `<button class="hbtn hm" id="chanBtn" title="Участники канала">${ico('users')}<span class="lbl">${c.isPublic ? 'Для всех' : n + ' ' + plural(n, 'участник', 'участника', 'участников')}</span></button>`; }
   }
   if (chat.startsWith('g:')) {
     const g = state.groups.get(Number(chat.slice(2)));
-    if (g) actions = `<button class="hbtn" id="groupBtn">👥 ${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')}</button>`;
+    if (g) actions = `<button class="hbtn hm" id="groupBtn" title="Участники чата">${ico('users')}<span class="lbl">${g.members.length} ${plural(g.members.length, 'участник', 'участника', 'участников')}</span></button>`;
   } else if (chat.startsWith('d:')) {
     const [, a, b] = chat.split(':');
     const other = state.users.get(a === state.me.id ? b : a);
     if (other && other.id !== state.me.id) {
       $('#chatTitle').innerHTML += `<span class="sub">${statusOf(other) ? esc(statusOf(other)) + ' · ' : ''}${other.position ? esc(other.position) + ' · ' : ''}${seenText(other)}</span>`;
-      actions = `<button class="hbtn" id="assignBtn" data-uid="${other.id}" title="Поручить задачу">📋 <span class="lbl">Поручить задачу</span></button>`;
+      actions = `<button class="hbtn hm" id="assignBtn" data-uid="${other.id}" title="Поручить задачу">${ico('clipboard')}<span class="lbl">Поручить задачу</span></button>`;
     }
   }
   const self = chat.startsWith('d:') && chat.split(':')[1] === chat.split(':')[2];
@@ -1129,10 +1189,21 @@ function renderChatHeader() {
   $('#readonlyNote').textContent = obs ? (chat.startsWith('d:') ? '👁 Личная переписка сотрудников — просмотр как администратор' : '👁 Вы не участник этого чата — просмотр как администратор') : '🔒 В этом канале пишут только администраторы';
   $('#readonlyNote').classList.toggle('hidden', !ro);
   document.querySelector('#chatView .input-row').classList.toggle('hidden', ro);
-  actions += `<button class="hbtn" id="aiBtn" title="Помощник с ИИ: кратко о переписке или свой вопрос">✨ <span class="lbl">ИИ</span></button><button class="hbtn" id="filesBtn" title="Файлы, фото и ссылки">📁</button><button class="hbtn" id="exportBtn" title="Выгрузить переписку в файл">⬇</button>`;
-  $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + ' ' + actions;
+  actions += `<button class="hbtn" id="aiBtn" title="Помощник с ИИ: кратко о переписке или свой вопрос">${ico('sparkle')}<span class="lbl">ИИ</span></button><button class="hbtn" id="hdrMore" title="Ещё: файлы, выгрузка">${ico('more')}</button>`;
+  $('#chatActions').innerHTML = (self || obs ? '' : callBtn) + actions;
   $('#chatActions').style.display = 'flex';
   $('#chatActions').style.gap = '8px';
+  $('#hdrMore').onclick = (e) => {
+    const items = [];
+    const mob = matchMedia('(max-width: 720px)').matches;
+    if (mob && $('#chanBtn')) items.push({ icon: 'users', label: 'Участники канала', fn: () => $('#chanBtn').click() });
+    if (mob && $('#groupBtn')) items.push({ icon: 'users', label: 'Участники чата', fn: () => $('#groupBtn').click() });
+    if (mob && $('#assignBtn')) items.push({ icon: 'clipboard', label: 'Поручить задачу', fn: () => $('#assignBtn').click() });
+    items.push({ icon: 'folder', label: 'Файлы, фото и ссылки', fn: () => openChatFiles(chat) });
+    items.push({ icon: 'download', label: 'Выгрузить переписку', fn: () => exportChat(chat) });
+    popMenu(e.currentTarget, items);
+  };
+  updateSendState();
   const chb = $('#chanBtn');
   if (chb) chb.onclick = () => openChannelSettings(Number(chat.slice(2)));
   const gb = $('#groupBtn');
@@ -1141,8 +1212,6 @@ function renderChatHeader() {
   if (ab) ab.onclick = () => openTaskForm({ assigneeId: ab.dataset.uid });
   const cb = $('#callBtn');
   if (cb) cb.onclick = () => joinCall(chat);
-  $('#exportBtn').onclick = () => exportChat(chat);
-  $('#filesBtn').onclick = () => openChatFiles(chat);
   $('#aiBtn').onclick = () => openAiSummary(chat);
   renderPinBar();
 }
@@ -1366,7 +1435,7 @@ function renderMessages(scrollBottom) {
   const box = $('#messages');
   box.innerHTML = list.length
     ? list.map((m, i) => messageHtml(m, list[i - 1])).join('')
-    : '<div class="empty">Сообщений пока нет. Напишите первым!</div>';
+    : emptyState('inbox', 'Сообщений пока нет', 'Напишите первым — коллеги увидят сообщение сразу.');
   if (scrollBottom) box.scrollTop = box.scrollHeight;
   hydrateImages(box);
 }
@@ -1517,7 +1586,20 @@ $('#input').addEventListener('input', () => {
     state.rt.send({ type: 'broadcast', event: 'typing', payload: { chat: state.current, userId: state.me.id } });
   }
 });
-function autosize() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; }
+function autosize() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; updateSendState(); }
+// пока поле пустое — микрофон, как начали писать (или прикрепили файл) — кнопка «отправить»
+function updateSendState() {
+  const row = document.querySelector('#chatView .input-row'); if (!row) return;
+  row.classList.toggle('has-text', !!($('#input').value.trim() || $('#uploads').children.length || state.editing));
+}
+new MutationObserver(updateSendState).observe($('#uploads'), { childList: true });
+// лента прилипает к низу: если читатель был внизу, а высота ленты поменялась (появилась полоса «Закреплено»,
+// открылась клавиатура на телефоне, подгрузилась картинка) — остаёмся у последнего сообщения
+(() => {
+  const m = $('#messages'); let stick = true;
+  m.addEventListener('scroll', () => { stick = m.scrollHeight - m.scrollTop - m.clientHeight < 80; }, { passive: true });
+  new ResizeObserver(() => { if (stick) m.scrollTop = m.scrollHeight; }).observe(m);
+})();
 
 function showTyping(userId) {
   clearTimeout(state.typingTimers.get(userId));
@@ -1786,7 +1868,7 @@ function renderPinBar() {
   const bar = $('#pinBar'), pins = state.pins.get(state.current) || [];
   if (!pins.length || state.view !== 'chat') { bar.classList.add('hidden'); return; }
   const p = pins[0];
-  bar.innerHTML = `<span>📌</span><div class="rb-text"><b>Закреплено${pins.length > 1 ? ` (${pins.length})` : ''}</b><span>${esc((p.text || (p.file ? '📎 ' + p.file.name : '')).slice(0, 120))}</span></div>`;
+  bar.innerHTML = `${ico('pin', 'pin-i')}<div class="pin-line"><b>Закреплено${pins.length > 1 ? ` (${pins.length})` : ''}:</b> <span>${esc((p.text || (p.file ? '📎 ' + p.file.name : '')).slice(0, 160))}</span></div>`;
   bar.classList.remove('hidden');
   bar.onclick = () => pins.length === 1 ? jumpTo(p.id) : openModal(`<h3>📌 Закреплённые</h3><div class="modal-body">
     ${pins.map((x) => `<div class="person" data-jump="${x.id}">${avatar(state.users.get(x.userId) || { id: x.userId, name: '?' }, 'sm')}
@@ -2589,7 +2671,7 @@ function renderWorkday() {
   const el = $('#navWork'); if (!el) return;
   const w = state.workday;
   el.querySelector('.label').innerHTML = w ? `Закончить день <small class="pos">с ${new Date(w.started_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small>` : 'Начать рабочий день';
-  el.querySelector('.ico').textContent = w ? '⏹' : '▶';
+  el.querySelector('.ico').innerHTML = ico(w ? 'stop' : 'play');
   el.classList.toggle('working', !!w);
 }
 async function toggleWorkday() {
@@ -3326,7 +3408,8 @@ function renderTasks() {
     `<div class="task-group ${cls || ''}">${title} <span class="n">${items.length}</span></div>` + items.map(taskRow).join('')).join('');
   if (!html) {
     const empty = { mine: 'Открытых задач у вас нет 🎉', byme: 'Вы пока никому не поручали задач', all: 'Задач пока нет' }[f];
-    html = `<div class="empty">${empty}${!state.showDone && done.length ? `<br><small>Выполненных: ${done.length}</small>` : ''}</div>`;
+    html = emptyState('tasks', empty.replace(' 🎉', ''), f === 'mine' ? 'Можно выдохнуть — или поставить задачу коллеге.' : 'Поручения появятся здесь, как только вы их создадите.',
+      `<button class="primary" onclick="openTaskForm({})">+ Новая задача</button>`) + (!state.showDone && done.length ? `<div class="muted" style="text-align:center;font-size:13px">Выполненных: ${done.length}</div>` : '');
   }
   if (state.taskBoard) return renderBoard(list);
   $('#taskList').classList.remove('board');

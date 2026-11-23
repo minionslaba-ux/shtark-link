@@ -925,6 +925,77 @@
   .ai-file { font-size: 12px; opacity: .9; margin-bottom: 4px; }
   .ai-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .ai-tools .hbtn, .md-xlsx { font-size: 12px; padding: 4px 10px; }
+
+  /* ===== Design v4: единые иконки, компактное меню, шапка, строка ввода ===== */
+  svg.i { width: 18px; height: 18px; flex-shrink: 0; display: block; }
+  .chat-item .ico { width: 22px; display: flex; align-items: center; justify-content: center; opacity: .8; }
+  .chat-item .ico svg.i { width: 19px; height: 19px; }
+  .chat-item.active .ico, .chat-item:hover .ico { opacity: 1; }
+  .chat-item.nav { margin: 1px 10px; padding: 8px 10px; }
+  .chat-item.working .ico { color: #22c55e; opacity: 1; }
+  .nav-more .chev { margin-left: auto; display: flex; opacity: .55; transition: transform .25s var(--ease-out, ease); }
+  .nav-more .chev svg.i { width: 16px; height: 16px; }
+  .nav-more.open .chev { transform: rotate(180deg); }
+  .nav-more-list { display: none; }
+  .nav-more-list.open { display: block; animation: navOpen .25s var(--ease-out, ease); }
+  .nav-more-list .chat-item.nav { padding-left: 18px; font-weight: 400; }
+  @keyframes navOpen { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+  .me { gap: 4px; }
+  .me-av { cursor: pointer; flex-shrink: 0; display: flex; position: relative; margin-right: 4px; }
+  .me-av .avatar { width: 32px; height: 32px; font-size: 12px; }
+  .me-av::after { content: ''; position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%; background: #22c55e; border: 2px solid var(--side); }
+  .me .bell { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--side-text); border-radius: 9px; }
+  .me .bell svg.i { width: 18px; height: 18px; }
+  .me .bell.off::after { top: 4px; right: 4px; }
+  .side-close { align-items: center; justify-content: center; line-height: 0; }
+  .side-close svg.i { width: 20px; height: 20px; }
+
+  .hbtn { display: inline-flex; align-items: center; gap: 6px; }
+  .hbtn svg.i { width: 17px; height: 17px; }
+  .hbtn.call-live { border-color: #22c55e; color: #16a34a; }
+  .hbtn.call-live b { background: #22c55e; color: #fff; border-radius: 9px; font-size: 11px; padding: 0 6px; line-height: 17px; }
+  #hdrMore { padding-left: 9px; padding-right: 9px; }
+  .menuBtn { display: none; align-items: center; justify-content: center; color: inherit; }
+  .menuBtn svg.i { width: 24px; height: 24px; }
+
+  .pop-menu { position: fixed; z-index: 1000; min-width: 230px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(15,23,42,.18); padding: 6px; animation: popMenuIn .16s var(--ease-out, ease); transform-origin: top right; }
+  .pop-menu button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; padding: 10px 12px; border-radius: 10px; font-size: 14px; color: inherit; text-align: left; cursor: pointer; }
+  .pop-menu button:hover { background: var(--accent-soft); }
+  .pop-menu svg.i { color: var(--accent); }
+  @keyframes popMenuIn { from { opacity: 0; transform: scale(.96) translateY(-4px); } to { opacity: 1; transform: none; } }
+
+  .input-row { align-items: center; }
+  .input-row .icon-btn svg.i { width: 22px; height: 22px; }
+  .send-btn { width: 42px; height: 42px; border-radius: 50%; padding: 0; display: none; align-items: center; justify-content: center; flex-shrink: 0; }
+  .send-btn svg.i { width: 19px; height: 19px; margin: 1px 2px 0 0; }
+  .input-row.has-text .send-btn { display: flex; animation: popMenuIn .18s var(--ease-out, ease); }
+  .input-row.has-text #voiceBtn { display: none; }
+
+  #pinBar { padding: 7px 16px; gap: 8px; }
+  #pinBar .pin-i { width: 15px; height: 15px; color: var(--accent); }
+  .pin-line { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--muted); }
+  .pin-line b { color: var(--accent); font-weight: 600; }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; margin: 56px auto; max-width: 360px; padding: 0 16px; color: var(--muted); }
+  .es-ico { width: 76px; height: 76px; border-radius: 24px; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; margin-bottom: 8px; animation: popMenuIn .4s var(--ease-out, ease); }
+  .es-ico svg.i { width: 36px; height: 36px; stroke-width: 1.7; }
+  .es-title { font-size: 17px; font-weight: 600; color: var(--text); }
+  .es-text { font-size: 14px; line-height: 1.5; }
+  .empty-state .primary { margin-top: 10px; }
+  .danger-link { color: var(--danger) !important; display: inline-flex; align-items: center; gap: 6px; }
+  .danger-link svg.i { width: 16px; height: 16px; }
+
+  @media (max-width: 720px) {
+    .menuBtn { display: flex; }
+    .hbtn.hm { display: none; }
+    #chatActions .hbtn { width: 40px; height: 40px; padding: 0; justify-content: center; }
+    #chatActions .hbtn.call-live { width: auto; padding: 0 10px; }
+    .msg .meta .pos { display: none; }
+    #pinBar { padding: 6px 12px; }
+    .send-btn { width: 42px; height: 42px; padding: 0; }
+  }
 </style>
 </head>
 <body>
@@ -950,21 +1021,24 @@
 <!-- Приложение -->
 <div id="app" class="hidden">
   <aside id="sidebar">
-    <div class="brand"><img src="icon.svg" alt=""><span><b>Shtark</b> Link</span><button id="sideClose" class="side-close" title="Закрыть меню">✕</button></div>
-    <div class="me"><span class="dot on"></span><span class="name" id="meName" title="Мой профиль и фото" style="cursor:pointer"></span><button class="bell" id="searchBtn" title="Поиск по сообщениям и файлам">🔍</button><button class="bell" id="bellBtn" title="Уведомления">🔔</button><button id="logoutBtn">Выйти</button></div>
+    <div class="brand"><img src="icon.svg" alt=""><span><b>Shtark</b> Link</span><button id="sideClose" class="side-close" title="Закрыть меню" data-ico="x"></button></div>
+    <div class="me"><span class="me-av" id="meAv" title="Мой профиль и фото"></span><span class="name" id="meName" title="Мой профиль и фото" style="cursor:pointer"></span><button class="bell" id="searchBtn" title="Поиск по сообщениям и файлам" data-ico="search"></button><button class="bell" id="bellBtn" title="Уведомления" data-ico="bell"></button><button class="bell" id="logoutBtn" title="Выйти" data-ico="logout"></button></div>
     <div class="push-prompt hidden" id="pushPrompt"><span>🔔</span><span><b>Включите уведомления</b>, чтобы не пропускать сообщения и задачи</span></div>
     <div class="side-scroll">
-      <div class="chat-item nav" id="navCalendar"><span class="ico">📅</span><span class="label">Календарь</span><span id="todayBadge"></span></div>
-      <div class="chat-item nav" id="navTasks"><span class="ico">📋</span><span class="label">Задачи</span><span id="tasksBadge"></span></div>
-      <div class="chat-item nav" id="navPeople"><span class="ico">👥</span><span class="label">Сотрудники</span></div>
-      <div class="chat-item nav" id="navCalls"><span class="ico">📞</span><span class="label">Звонки</span></div>
-      <div class="chat-item nav" id="navWork"><span class="ico">▶</span><span class="label">Начать рабочий день</span></div>
-      <div class="chat-item nav" id="navAppr"><span class="ico">✅</span><span class="label">Согласования</span><span id="apprBadge"></span></div>
-      <div class="chat-item nav" id="navKb"><span class="ico">📚</span><span class="label">База знаний</span></div>
-      <div class="chat-item nav" id="navAi"><span class="ico">✨</span><span class="label">Спросить ИИ</span></div>
-      <div class="chat-item nav" id="navSaved"><span class="ico">★</span><span class="label">Избранное</span></div>
-      <div class="chat-item nav" id="navLook"><span class="ico">🎨</span><span class="label">Оформление</span></div>
-      <div class="chat-item nav hidden" id="navAdmin"><span class="ico">⚙️</span><span class="label">Администрирование</span></div>
+      <div class="chat-item nav" id="navCalendar"><span class="ico" data-ico="calendar"></span><span class="label">Календарь</span><span id="todayBadge"></span></div>
+      <div class="chat-item nav" id="navTasks"><span class="ico" data-ico="tasks"></span><span class="label">Задачи</span><span id="tasksBadge"></span></div>
+      <div class="chat-item nav" id="navAppr"><span class="ico" data-ico="approve"></span><span class="label">Согласования</span><span id="apprBadge"></span></div>
+      <div class="chat-item nav" id="navAi"><span class="ico" data-ico="sparkle"></span><span class="label">Спросить ИИ</span></div>
+      <div class="chat-item nav" id="navWork"><span class="ico" data-ico="play"></span><span class="label">Начать рабочий день</span></div>
+      <div class="chat-item nav nav-more" id="navMore"><span class="ico" data-ico="grid"></span><span class="label">Ещё</span><span class="chev" data-ico="chevron"></span></div>
+      <div class="nav-more-list" id="navMoreList">
+        <div class="chat-item nav" id="navPeople"><span class="ico" data-ico="users"></span><span class="label">Сотрудники</span></div>
+        <div class="chat-item nav" id="navCalls"><span class="ico" data-ico="phone"></span><span class="label">Звонки</span></div>
+        <div class="chat-item nav" id="navKb"><span class="ico" data-ico="book"></span><span class="label">База знаний</span></div>
+        <div class="chat-item nav" id="navSaved"><span class="ico" data-ico="star"></span><span class="label">Избранное</span></div>
+        <div class="chat-item nav" id="navLook"><span class="ico" data-ico="palette"></span><span class="label">Оформление</span></div>
+        <div class="chat-item nav hidden" id="navAdmin"><span class="ico" data-ico="settings"></span><span class="label">Администрирование</span></div>
+      </div>
       <div class="side-title">Каналы <button id="newChannelBtn" title="Создать канал">+</button></div>
       <div id="channelList"></div>
       <div class="side-title">Чаты <button id="newGroupBtn" title="Создать чат">+</button></div>
@@ -980,7 +1054,7 @@
     <!-- Переписка -->
     <section class="view" id="chatView">
       <div class="header">
-        <button class="menuBtn">☰</button>
+        <button class="menuBtn" data-ico="menu" title="Меню"></button>
         <h2 id="chatTitle"></h2>
         <div id="chatActions"></div>
       </div>
@@ -995,11 +1069,11 @@
         <div id="stickerPop" class="sticker-pop hidden"></div>
         <div id="readonlyNote" class="readonly-note hidden">🔒 В этом канале пишут только администраторы</div>
         <div class="input-row">
-          <button class="icon-btn plus-btn" id="attachBtn" title="Файл, опрос, видео, отложить, срочное">＋</button>
+          <button class="icon-btn plus-btn" id="attachBtn" title="Файл, опрос, видео, отложить, срочное" data-ico="plus"></button>
           <textarea id="input" rows="1" placeholder="Сообщение…" title="Enter — отправить, Shift+Enter — новая строка, ↑ — изменить последнее"></textarea>
-          <button class="icon-btn" id="stickerBtn" title="Стикеры Shtark">😊</button>
-          <button class="icon-btn" id="voiceBtn" title="Голосовое сообщение">🎤</button>
-          <button class="send-btn" id="sendBtn">Отправить</button>
+          <button class="icon-btn" id="stickerBtn" title="Стикеры Shtark" data-ico="smile"></button>
+          <button class="icon-btn" id="voiceBtn" title="Голосовое сообщение" data-ico="mic"></button>
+          <button class="send-btn" id="sendBtn" title="Отправить (Enter)" data-ico="send"></button>
         </div>
         <div id="voiceBar" class="voice-bar hidden"><span class="rec-dot"></span> Запись <b id="voiceTime">0:00</b><span class="spacer"></span>
           <button class="secondary" id="voiceCancel">Отмена</button><button class="primary" id="voiceSend">Отправить ➤</button></div>
@@ -1011,7 +1085,7 @@
     <!-- Календарь -->
     <section class="view hidden" id="calView">
       <div class="header">
-        <button class="menuBtn">☰</button>
+        <button class="menuBtn" data-ico="menu" title="Меню"></button>
         <h2>Календарь</h2>
         <div class="seg" id="calFilter">
           <button data-f="all" class="active">Все</button>
@@ -1043,7 +1117,7 @@
     <!-- Задачи -->
     <section class="view hidden" id="taskView">
       <div class="header">
-        <button class="menuBtn">☰</button>
+        <button class="menuBtn" data-ico="menu" title="Меню"></button>
         <h2>Задачи</h2>
         <div class="seg" id="taskFilter">
           <button data-f="mine" class="active">Мне</button>
@@ -1064,7 +1138,7 @@
     <!-- Администрирование -->
     <section class="view hidden" id="adminView">
       <div class="header">
-        <button class="menuBtn">☰</button>
+        <button class="menuBtn" data-ico="menu" title="Меню"></button>
         <h2>Администрирование</h2>
         <button class="hbtn primary-sm" id="adminAdd">+ Добавить сотрудника</button>
       </div>
@@ -1124,8 +1198,8 @@
 <div id="toast"></div>
 
 
-<script src="vendor/supabase.js?v=202611211500"></script>
-<script src="config.js?v=202611211500"></script>
-<script src="app.js?v=202611211500"></script>
+<script src="vendor/supabase.js?v=202611231400"></script>
+<script src="config.js?v=202611231400"></script>
+<script src="app.js?v=202611231400"></script>
 </body>
 </html>
