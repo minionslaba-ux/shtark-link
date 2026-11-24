@@ -3,6 +3,8 @@
 const CFG = window.SHTARK_CONFIG;
 const sb = supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'shtark-link-auth' },
+  // постоянное соединение (новые сообщения): обрыв замечаем за 15 с вместо 30, переподключаемся быстро
+  realtime: { heartbeatIntervalMs: 15000, timeout: 10000, reconnectAfterMs: (n) => [300, 1000, 2000, 4000][n - 1] || 5000 },
 });
 const EMAIL_DOMAIN = '@shtark-link.invalid';
 const MAX_FILE = 50 * 1024 * 1024;
@@ -786,9 +788,10 @@ function connectRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sl_task_comments' }, onCommentChange)
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
+        setConn(true);
         if (!firstDb) resync(); // после обрыва связи догружаем пропущенное
         firstDb = false;
-      }
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setConn(false);
     });
 
   state.rt = sb.channel('sl:main', { config: { private: true, presence: { key: state.me.id }, broadcast: { self: false } } })
@@ -805,6 +808,50 @@ function connectRealtime() {
       announceCall();
     });
 }
+
+// ---------- Связь с сервером ----------
+// Телефон, свернув приложение или погасив экран, тихо обрывает соединение, а браузер замечает это лишь по таймеру
+// (до минуты). Поэтому при возврате в приложение сами проверяем связь, переподключаемся сразу и догружаем пропущенное.
+let connTimer = null, connOk = true, hiddenAt = 0, wakeAt = 0, reconnecting = false;
+function setConn(ok) {
+  connOk = ok;
+  clearTimeout(connTimer);
+  let pill = $('#connPill');
+  if (ok) { pill?.classList.remove('show'); return; }
+  connTimer = setTimeout(() => { // короткие переподключения не показываем, чтобы не мигало
+    if (connOk) return;
+    if (!pill) { pill = document.createElement('div'); pill.id = 'connPill'; pill.className = 'conn-pill'; document.body.appendChild(pill); }
+    pill.innerHTML = navigator.onLine ? '<span class="typing-dots"><i></i><i></i><i></i></span> Подключение…' : 'Нет интернета — сообщения отправятся, когда связь появится';
+    pill.classList.add('show');
+  }, 1500);
+}
+async function reconnectRealtime() {
+  if (reconnecting || !state.me) return;
+  reconnecting = true; setConn(false);
+  try {
+    await sb.removeAllChannels().catch(() => {});
+    await sb.realtime.disconnect?.();
+    const { data: { session } } = await sb.auth.getSession();
+    if (session) sb.realtime.setAuth(session.access_token);
+    connectRealtime();
+  } finally { reconnecting = false; }
+}
+function wake() {
+  if (!state.me || document.hidden) return;
+  const now = Date.now();
+  if (now - wakeAt < 3000) return;
+  wakeAt = now;
+  const away = hiddenAt ? now - hiddenAt : 0;
+  hiddenAt = 0;
+  const live = sb.realtime.isConnected?.() && connOk;
+  if (!live || away > 20000) reconnectRealtime();
+  if (away > 3000 || !live) resync(); // пропущенное догружаем обычным быстрым запросом, не дожидаясь соединения
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted) { hiddenAt = hiddenAt || Date.now() - 60000; wake(); } });
+window.addEventListener('focus', wake);
+window.addEventListener('online', () => { wakeAt = 0; hiddenAt = hiddenAt || Date.now() - 60000; wake(); });
+window.addEventListener('offline', () => setConn(false));
 
 // Состояние звонков: каждый участник объявляет «я в звонке X» при входе, выходе и раз в 15 с
 const callStates = new Map(); // userId -> { chat, until }
