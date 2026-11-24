@@ -7,7 +7,58 @@ self.addEventListener('install', () => self.skipWaiting());
 // какой чат открыт на экране в каждой вкладке/окне приложения
 const openChats = new Map(); // id клиента -> чат
 self.addEventListener('message', (e) => { if (e.data && e.data.type === 'state' && e.source) openChats.set(e.source.id, e.data.chat || null); });
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys()) if (k.startsWith('sl-app-') && k !== CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
+
+// ---------- Быстрый запуск: файлы приложения хранятся на устройстве ----------
+// • страница — из сети, но если сеть медленная (дольше 3 с) или её нет — сохранённая копия;
+// • файлы с номером версии (app.js?v=…) не меняются — берутся сразу с устройства;
+// • картинки, стикеры и прочее — сразу из копии, а свежая версия подкачивается в фоне.
+const CACHE = 'sl-app-v1';
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET' || req.headers.has('range')) return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin || !url.href.startsWith(SCOPE)) return;
+  if (/\/(version\.json|sw\.js)$/.test(url.pathname)) return; // проверка обновлений — всегда из сети
+  if (req.mode === 'navigate') return e.respondWith(pageFirstNetwork(url));
+  if (url.searchParams.has('v')) return e.respondWith(versioned(req, url));
+  if (/\.(js|css|svg|png|jpe?g|webp|gif|json|woff2?|webmanifest)$/i.test(url.pathname)) return e.respondWith(fromCacheThenUpdate(req));
+});
+async function pageFirstNetwork(url) {
+  const cache = await caches.open(CACHE);
+  const key = url.origin + url.pathname;
+  const net = fetch(key, { cache: 'no-cache' }).then((r) => { if (r.ok) cache.put(key, r.clone()); return r; });
+  const timeout = new Promise((res) => setTimeout(res, 3000));
+  try {
+    const r = await Promise.race([net, timeout]);
+    if (r) return r;
+  } catch { /* нет сети */ }
+  const cached = await cache.match(key);
+  if (cached) { net.catch(() => {}); return cached; }
+  return net;
+}
+async function versioned(req, url) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req);
+  if (hit) return hit;
+  const r = await fetch(req);
+  if (r.ok) {
+    await cache.put(req, r.clone());
+    // старые версии этого же файла больше не нужны
+    for (const k of await cache.keys()) { const u = new URL(k.url); if (u.pathname === url.pathname && u.search !== url.search) cache.delete(k); }
+  }
+  return r;
+}
+async function fromCacheThenUpdate(req) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req);
+  const net = fetch(req).then((r) => { if (r.ok) cache.put(req, r.clone()); return r; });
+  if (hit) { net.catch(() => {}); return hit; }
+  return net;
+}
 
 self.addEventListener('push', (event) => {
   let data = {};

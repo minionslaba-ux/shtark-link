@@ -337,6 +337,7 @@ async function logout() {
   try { await leaveCall(); } catch {}
   await sb.auth.signOut().catch(() => {});
   localStorage.removeItem('lastChat');
+  try { localStorage.removeItem(BOOT_KEY); } catch {}
   location.reload();
 }
 $('#logoutBtn').onclick = logout;
@@ -622,40 +623,80 @@ $('#navKb').onclick = () => { setSidebar(false); openKb(); };
 $('#navWork').onclick = () => toggleWorkday();
 
 // ---------- Старт ----------
-async function start() {
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return;
-  const me = check(await sb.from('sl_profiles').select('*').eq('id', user.id).maybeSingle());
-  if (!me || me.disabled) {
-    await sb.auth.signOut();
-    $('#authError').textContent = me ? 'Доступ отключён администратором' : 'Этот аккаунт не зарегистрирован в Shtark Link';
-    return;
-  }
-  state.me = profileFromRow(me);
-  loadPrefsFromProfile(me);
-  const [users, channels, groups, members] = await Promise.all([
+// ---------- Быстрый запуск ----------
+// Последние сотрудники, каналы и чаты хранятся на устройстве: приложение открывается сразу по ним,
+// а свежие данные с сервера подтягиваются в фоне. Все запросы идут одновременно.
+const BOOT_KEY = 'sl-boot';
+function readBoot(uid) { try { const c = JSON.parse(localStorage.getItem(BOOT_KEY) || 'null'); return c && c.uid === uid ? c : null; } catch { return null; } }
+function bootDone() { document.documentElement.classList.remove('booting'); }
+async function fetchCore(uid) {
+  const [me, users, channels, groups, members, chMembers] = await Promise.all([
+    sb.from('sl_profiles').select('*').eq('id', uid).maybeSingle(),
     sb.from('sl_profiles').select('id, login, name, position, avatar_url, is_admin, disabled, status_text, status_emoji, status_until, dnd, dnd_from, dnd_to, phone, department, birthday, last_active'),
     sb.from('sl_channels').select('id, name, readonly, is_public, auto_join, created_by').order('id'),
     sb.from('sl_groups').select('id, name, created_by'),
     sb.from('sl_group_members').select('group_id, user_id'),
+    sb.from('sl_channel_members').select('channel_id, user_id'),
   ]);
-  check(users).forEach((u) => state.users.set(u.id, profileFromRow(u)));
-  state.channels = check(channels).map(chanFromRow);
-  await loadChannelMembers();
-  const mem = check(members);
-  check(groups).forEach((g) => state.groups.set(g.id, {
-    id: g.id, name: g.name, createdBy: g.created_by, members: mem.filter((m) => m.group_id === g.id).map((m) => m.user_id),
-  }));
+  const d = { uid, at: Date.now(), me: check(me), users: check(users), channels: check(channels), groups: check(groups), members: check(members), chMembers: check(chMembers) };
+  try { localStorage.setItem(BOOT_KEY, JSON.stringify(d)); } catch { /* нет места — просто без кэша */ }
+  return d;
+}
+async function applyCore(d) {
+  const me = d.me;
+  if (!me || me.disabled) {
+    try { localStorage.removeItem(BOOT_KEY); } catch {}
+    await sb.auth.signOut();
+    bootDone(); $('#app').classList.add('hidden'); $('#auth').classList.remove('hidden');
+    $('#authError').textContent = me ? 'Доступ отключён администратором' : 'Этот аккаунт не зарегистрирован в Shtark Link';
+    return false;
+  }
+  state.me = profileFromRow(me);
+  loadPrefsFromProfile(me);
+  state.users = new Map(d.users.map((u) => [u.id, profileFromRow(u)]));
+  state.channels = d.channels.map(chanFromRow);
+  state.channels.forEach((c) => { c.members = d.chMembers.filter((m) => m.channel_id === c.id).map((m) => m.user_id); });
+  state.groups = new Map(d.groups.map((g) => [g.id, {
+    id: g.id, name: g.name, createdBy: g.created_by, members: d.members.filter((m) => m.group_id === g.id).map((m) => m.user_id),
+  }]));
+  return true;
+}
+
+async function start() {
+  // вход хранится на устройстве. Если есть сохранённые данные — показываем приложение сразу,
+  // не дожидаясь, пока продлится пропуск входа (это запрос к серверу, если приложение долго не открывали)
+  let uid = null;
+  try { uid = JSON.parse(localStorage.getItem('shtark-link-auth') || 'null')?.user?.id || null; } catch {}
+  const cached = uid ? readBoot(uid) : null;
+  const sessionP = sb.auth.getSession();
+  if (!cached) {
+    const { data: { session } } = await sessionP;
+    uid = session?.user?.id;
+    if (!uid) { bootDone(); return; }
+  }
+  const fresh = fetchCore(uid);
+  if (cached) fresh.catch(() => {}); // сеть может быть медленной — открываемся по сохранённым данным
+  if (!(await applyCore(cached || await fresh))) return;
+  if (cached) fresh.then(async (d) => {
+    if (!(await applyCore(d))) return;
+    $('#meName').textContent = state.me.name;
+    $('#meAv').innerHTML = avatar(state.users.get(state.me.id) || state.me, 'sm');
+    $('#navAdmin').classList.toggle('hidden', !state.me.isAdmin);
+    $('#newChannelBtn').classList.toggle('hidden', !state.me.isAdmin);
+    renderSidebar();
+    if (state.view === 'chat' && state.current) renderChatHeader();
+  }).catch(() => {});
 
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  bootDone();
   $('#meName').textContent = state.me.name;
   $('#meAv').innerHTML = avatar(state.users.get(state.me.id) || state.me, 'sm');
   $('#navAdmin').classList.toggle('hidden', !state.me.isAdmin);
   $('#newChannelBtn').classList.toggle('hidden', !state.me.isAdmin);
 
-  const { data: { session } } = await sb.auth.getSession();
-  sb.realtime.setAuth(session.access_token);
+  const { data: { session } } = await sessionP;
+  if (session) sb.realtime.setAuth(session.access_token);
   connectRealtime();
   initPush();
   heartbeat();
@@ -4886,4 +4927,9 @@ setInterval(checkUpdate, 5 * 60 * 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
 
 // ---------- Запуск ----------
-sb.auth.getSession().then(({ data }) => { if (data.session) start().catch((e) => { $('#authError').textContent = humanError(e); }); });
+// service worker сразу — он хранит файлы приложения на устройстве, чтобы следующий запуск был мгновенным
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) start().catch((e) => { bootDone(); $('#app').classList.add('hidden'); $('#auth').classList.remove('hidden'); $('#authError').textContent = humanError(e); });
+  else bootDone();
+}).catch(() => bootDone());
